@@ -79,7 +79,15 @@ def git(args, cwd, env=None, check=True):
 def repo_root(cwd):
     try:
         return git(["rev-parse", "--show-toplevel"], cwd).strip()
-    except Exception:
+    except Exception as e:
+        # "not a git repository" is normal; anything else (e.g. git's "dubious ownership" refusal) silently turns bw
+        # off, so leave a trace where hook errors go.
+        if "not a git repository" not in str(e):
+            try:
+                with open(os.path.join(os.path.expanduser("~"), ".bw-capture-errors.log"), "a") as f:
+                    f.write("%s repo_root(%s): %s\n" % (time.ctime(), cwd, str(e)[:300]))
+            except Exception:
+                pass
         return None
 
 
