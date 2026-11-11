@@ -1,0 +1,2 @@
+{"scenario": "bw compares a probe's output before and after a task, for each way a run can end (ran, timed out, command missing, not executable, flaky)",
+ "cmd": "python3 .bw/probes/verdict/run.py", "covers": ["plugin/scripts/bwcap.py"], "entry": "receipt() and beliefs --check"}

@@ -1,0 +1,7 @@
+{"regions": [
+  {"name": "Ledger and hooks", "paths": ["plugin/scripts/bwcap.py", "plugin/hooks/**"], "class": "migrate"},
+  {"name": "Watch room pages", "paths": ["plugin/scripts/*.html"], "class": "repair"},
+  {"name": "Commands and skills", "paths": ["plugin/commands/**", "plugin/skills/**"], "class": "repair"},
+  {"name": "Install", "paths": ["install.sh", ".claude-plugin/**", "plugin/.claude-plugin/**"], "class": "repair"},
+  {"name": "Docs", "paths": ["README.md", "plugin/README.md", "screens/**"], "class": "undo"}
+]}

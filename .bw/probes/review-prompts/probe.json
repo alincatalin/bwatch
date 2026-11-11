@@ -1,0 +1,2 @@
+{"scenario": "an engineer starts a task with one of these prompts; does a task that changes no code turn on review mode?",
+ "cmd": "python3 .bw/probes/review-prompts/run.py", "covers": ["plugin/scripts/bwcap.py"], "entry": "UserPromptSubmit hook"}

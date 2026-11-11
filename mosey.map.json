@@ -1,0 +1,180 @@
+{
+ "regions": [
+  {
+   "name": "App shell",
+   "class": "repair",
+   "layer": "app",
+   "paths": [
+    "shared/**"
+   ],
+   "uses": [
+    "Onboarding",
+    "Paywall",
+    "Home & library",
+    "Walking gate",
+    "Pressings",
+    "Identity",
+    "Billing",
+    "Podcast data",
+    "Motion",
+    "Design system"
+   ]
+  },
+  {
+   "name": "Onboarding",
+   "class": "repair",
+   "layer": "screens",
+   "paths": [
+    "feature-onboarding/**"
+   ],
+   "uses": [
+    "Design system",
+    "Billing",
+    "Podcast data",
+    "Motion"
+   ]
+  },
+  {
+   "name": "Paywall",
+   "class": "answer",
+   "layer": "screens",
+   "paths": [
+    "feature-paywall/**"
+   ],
+   "uses": [
+    "Design system",
+    "Billing",
+    "Podcast data"
+   ]
+  },
+  {
+   "name": "Home & library",
+   "class": "undo",
+   "layer": "screens",
+   "paths": [
+    "feature-home/**",
+    "feature-discover/**",
+    "feature-history/**",
+    "feature-playlists/**",
+    "feature-insights/**"
+   ],
+   "uses": [
+    "Design system",
+    "Billing",
+    "Podcast data",
+    "Paywall"
+   ]
+  },
+  {
+   "name": "Walking gate",
+   "class": "repair",
+   "layer": "screens",
+   "paths": [
+    "feature-playback/**",
+    "core-playback/**"
+   ],
+   "uses": [
+    "Design system",
+    "Billing",
+    "Podcast data",
+    "Motion"
+   ]
+  },
+  {
+   "name": "Pressings",
+   "class": "repair",
+   "layer": "screens",
+   "paths": [
+    "feature-pressings/**"
+   ],
+   "uses": [
+    "Design system",
+    "Billing",
+    "Podcast data",
+    "Paywall"
+   ]
+  },
+  {
+   "name": "Release build",
+   "class": "repair",
+   "layer": "around the code",
+   "paths": [
+    "**/build.gradle.kts",
+    "gradle/**",
+    "**/proguard*",
+    "iosApp/*.xcodeproj/**",
+    "gradlew",
+    "gradlew.bat"
+   ]
+  },
+  {
+   "name": "Identity",
+   "class": "migrate",
+   "layer": "core",
+   "paths": [
+    "core-billing/**/Account*",
+    "core-billing/**/CurrentOrCreate*",
+    "androidApp/**/Firebase*",
+    "iosApp/**/FirebaseBackend.swift"
+   ],
+   "uses": [
+    "Billing"
+   ]
+  },
+  {
+   "name": "Billing",
+   "class": "answer",
+   "layer": "core",
+   "paths": [
+    "core-billing/**"
+   ],
+   "uses": [
+    "Identity"
+   ]
+  },
+  {
+   "name": "Podcast data",
+   "class": "migrate",
+   "layer": "core",
+   "paths": [
+    "core-data/**"
+   ],
+   "uses": [
+    "Billing"
+   ]
+  },
+  {
+   "name": "Motion",
+   "class": "repair",
+   "layer": "core",
+   "paths": [
+    "core-motion/**"
+   ]
+  },
+  {
+   "name": "Design system",
+   "class": "undo",
+   "layer": "core",
+   "paths": [
+    "core-ui/**"
+   ]
+  },
+  {
+   "name": "Decision docs",
+   "class": "undo",
+   "layer": "around the code",
+   "paths": [
+    "docs/**",
+    "CLAUDE.md",
+    "README.md"
+   ]
+  }
+ ],
+ "layers": [
+  "app",
+  "screens",
+  "core",
+  "around the code"
+ ],
+ "uses_note": "uses = Gradle project dependencies between modules (2026-11-04)"
+}

@@ -1,0 +1,11 @@
+# bw
+
+bw watches agent tasks in a git repo, in any language. When an agent task ends, it snapshots the change in git and runs the repo's behavior probes (`.bw/probes/`) on the code before and after: a receipt of executed outputs. If a costly region changed with no probe showing it, bw asks the agent to write probes. Outputs you keep become your beliefs; bw re-runs them after every later task and tells only you when one breaks. The watch room shows what needs you since you last looked, a map of the repo, the timeline and behavior history. `/bw:receipt` runs the probes now, `/bw:beliefs` lists what you kept. Reviews come back as findings shown by probes (Fix this / Expected / Skip); `/bw:how <question>` investigates read-only; `/bw:why <probe>` and `/bw:recall [area]` look back. Other agents use the same pieces from the command line (see the top-level README).
+
+Use `/bw:on` in a repo to turn it on (it drafts a map from the folders), `/bw:home` to open the watch room, `/bw:off` to turn it off. In repos where bw is off, the hooks do nothing. Needs python3 and git. All state lives in the repo's .git/bw folder.
+
+Steering from the watch room: after you see what a behavior does now, pick Keep as expected, Leave open, or Not intended… and choose what it should do instead. "Do it now" queues the request and copies `/bw:do`; paste it in Claude Code and the agent gets each request with its code lines. The result comes back to the watch room as a card. "Record for next time" saves it instead: the next time an agent edits those files, bw stops that edit once and shows the agent your decision. Open questions can be checked now (`/bw:do`) or when the code is touched again.
+
+Decisions are saved in .git/bw when you open the watch room with `/bw:home` (served on 127.0.0.1 with a random token). The page only opens after a task when something needs you; otherwise bw prints one line. `/bw:map` shows the map and changes what counts as costly.
+
+Plan mode: when Claude finishes a plan, bw opens it as a page (comment on any part, Request changes or Approve plan) and Claude waits in the background for your answer. bw checks the files the plan names against git, and after approval names changed files the plan never mentioned. `BW_PLAN_GATE=0` turns this off. `/bw:replies` reprints your latest answer.

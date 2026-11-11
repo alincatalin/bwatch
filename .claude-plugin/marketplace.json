@@ -1,0 +1,7 @@
+{
+  "name": "bw-local",
+  "owner": { "name": "Alin" },
+  "plugins": [
+    { "name": "bw", "source": "./plugin", "description": "Executed behavior receipts after each agent task, and a ledger of what you kept. Any repo, any language." }
+  ]
+}

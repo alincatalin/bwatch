@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>bw plan</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: the plan reads top to bottom in one column; what bw checked sits beside it; the answer bar stays at the bottom. */
+:root{
+  --bg:#f3f5f8; --panel:#ffffff; --ink:#18202c; --muted:#5b6575; --faint:#8a93a2; --line:#dde2ea; --soft:#eef1f5;
+  --accent:#1f5f6b; --accent-soft:#dcecee; --good:#1d7f55; --good-soft:#ddf1e6; --bad:#b83a2a; --bad-soft:#f8e1dd; --warn:#b67a10; --warn-soft:#f6ecd6;
+  --display:"IBM Plex Sans Condensed","Arial Narrow",system-ui,sans-serif;
+  --body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#11161e; --panel:#19202b; --ink:#e6ebf2; --muted:#a2acbb; --faint:#768092; --line:#2b3442; --soft:#212a36;
+  --accent:#6fc2cc; --accent-soft:#1d3a40; --good:#4cc28b; --good-soft:#183a2b; --bad:#ec6a55; --bad-soft:#3d211d; --warn:#e7a43c; --warn-soft:#3a2e17; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#11161e; --panel:#19202b; --ink:#e6ebf2; --muted:#a2acbb; --faint:#768092; --line:#2b3442; --soft:#212a36;
+  --accent:#6fc2cc; --accent-soft:#1d3a40; --good:#4cc28b; --good-soft:#183a2b; --bad:#ec6a55; --bad-soft:#3d211d; --warn:#e7a43c; --warn-soft:#3a2e17; color-scheme:dark}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.55}
+code,.mono{font-family:var(--mono);font-size:.86em}
+.top{padding:20px max(16px,env(safe-area-inset-left,0px)) 12px max(16px,env(safe-area-inset-right,0px));max-width:1180px;margin:0 auto;display:flex;flex-wrap:wrap;gap:8px 14px;align-items:baseline}
+.top h1{font-family:var(--display);font-weight:600;font-size:1.55rem;margin:0;text-wrap:balance;flex:1 1 420px;min-width:0}
+.chip{display:inline-block;border-radius:999px;padding:3px 11px;font-size:.78rem;font-weight:600;white-space:nowrap}
+.chip.wait{background:var(--warn-soft);color:var(--warn)} .chip.ok{background:var(--good-soft);color:var(--good)} .chip.ask{background:var(--accent-soft);color:var(--accent)}
+.revs{display:flex;gap:6px;flex-wrap:wrap;width:100%}
+.revs button{font:inherit;font-size:.8rem;border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:6px;padding:2px 9px;cursor:pointer}
+.revs button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);font-weight:600}
+.grid{max-width:1180px;margin:0 auto;padding:0 max(16px,env(safe-area-inset-right,0px)) 150px max(16px,env(safe-area-inset-left,0px));display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:20px;align-items:start}
+@media (max-width:860px){.grid{grid-template-columns:1fr}}
+.doc{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 0;min-width:0}
+.blk{position:relative;padding:4px 56px 4px 22px;border-left:3px solid transparent}
+.blk:hover,.blk:focus-within{background:var(--soft)}
+.blk.chg{border-left-color:var(--accent)}
+.blk.has{border-left-color:var(--warn)}
+.blk h2,.blk h3,.blk h4{font-family:var(--display);margin:.5em 0 .1em;line-height:1.2;text-wrap:balance}
+.blk h2{font-size:1.3rem} .blk h3{font-size:1.1rem} .blk h4{font-size:1rem}
+.blk p{margin:.25em 0}
+.blk li{margin:.1em 0}
+.blk pre{background:var(--soft);border-radius:6px;padding:8px 10px;overflow-x:auto;margin:.3em 0;font-size:.84rem}
+.blk table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto} .blk td,.blk th{border:1px solid var(--line);padding:3px 8px;text-align:left}
+.cbtn{position:absolute;right:10px;top:6px;font:inherit;font-size:.75rem;border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:6px;padding:1px 7px;cursor:pointer;opacity:0}
+.blk:hover .cbtn,.cbtn:focus{opacity:1}
+@media (hover:none){.cbtn{opacity:1}}
+.ref{border-radius:4px;padding:0 3px}
+.ref.ok{background:var(--good-soft)} .ref.bad{background:var(--bad-soft)} .ref.new{background:var(--warn-soft)}
+.note{margin:6px 0 4px;background:var(--warn-soft);border-radius:8px;padding:8px 10px;font-size:.9rem}
+.note textarea{width:100%;min-height:64px;font:inherit;border:1px solid var(--line);border-radius:6px;padding:6px 8px;background:var(--panel);color:var(--ink)}
+.note .row{display:flex;gap:8px;justify-content:flex-end;margin-top:6px}
+.past{margin:6px 0 4px;border:1px dashed var(--line);border-radius:8px;padding:6px 10px;font-size:.85rem;color:var(--muted)}
+.btn{font:inherit;font-size:.88rem;font-weight:600;border-radius:7px;padding:7px 14px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--panel)}
+.btn:disabled{opacity:.45;cursor:default}
+.btn:focus-visible,.cbtn:focus-visible,.revs button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.side{display:grid;gap:12px;position:sticky;top:12px}
+@media (max-width:860px){.side{position:static}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;min-width:0}
+.card h3{margin:0 0 6px;font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.card ul{margin:0;padding:0;list-style:none;display:grid;gap:5px}
+.card li{font-size:.85rem;display:grid;grid-template-columns:14px 1fr;gap:6px;align-items:start;overflow-wrap:anywhere}
+.dot{width:9px;height:9px;border-radius:50%;margin-top:6px}
+.dot.ok{background:var(--good)} .dot.bad{background:var(--bad)} .dot.new{background:var(--warn)}
+.muted{color:var(--muted)} .small{font-size:.82rem}
+.bar{position:fixed;left:0;right:0;bottom:0;background:var(--panel);border-top:1px solid var(--line);padding:10px max(16px,env(safe-area-inset-right,0px)) calc(10px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px))}
+.bar .in{max-width:1180px;margin:0 auto;display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}
+.bar textarea{flex:1 1 320px;min-width:0;min-height:40px;max-height:120px;font:inherit;font-size:.9rem;border:1px solid var(--line);border-radius:7px;padding:7px 9px;background:var(--bg);color:var(--ink);resize:vertical}
+.bar .msg{flex-basis:100%;font-size:.85rem;color:var(--muted)}
+.banner{max-width:1180px;margin:0 auto 10px;padding:0 16px}
+.banner div{background:var(--accent-soft);color:var(--accent);border-radius:8px;padding:8px 12px;font-size:.9rem}
+@media (prefers-reduced-motion:no-preference){.blk{transition:background .12s}}
+</style></head><body>
+<header class="top"><h1 id="title"></h1><span id="status" class="chip"></span><div class="revs" id="revs" role="group" aria-label="Revisions"></div></header>
+<div class="banner" id="banner" hidden><div id="bannertext"></div></div>
+<main class="grid"><article class="doc" id="doc" aria-label="The plan"></article><aside class="side" id="side"></aside></main>
+<footer class="bar" id="bar"><div class="in">
+<label class="small muted" for="general" style="position:absolute;left:-9999px">A note for the whole plan</label>
+<textarea id="general" placeholder="A note for the whole plan (optional)"></textarea>
+<button class="btn" id="changes">Request changes</button>
+<button class="btn primary" id="approve">Approve plan</button>
+<div class="msg" id="msg"></div></div></footer>
+<script>
+var D=/*BW_PLAN*/null;
+var TOKEN=(location.search.match(/[?&]t=([0-9a-f]+)/)||[])[1]||'';
+var CUR=D.revs.length, view=CUR, pending={}, KEY='bwplan-'+D.id+'-'+CUR;
+try{pending=JSON.parse(localStorage.getItem(KEY)||'{}')||{}}catch(e){pending={}}
+function keep(){try{localStorage.setItem(KEY,JSON.stringify(pending))}catch(e){}}
+function $(s){return document.querySelector(s)}
+function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+function fmtTime(t){var d=new Date(t*1000);return d.toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}
+// Markdown into blocks: headings, list items, fenced code, tables and paragraphs. Each block can take a comment.
+function blocks(md){
+  var L=md.replace(/\r/g,'').split('\n'),out=[],i=0;
+  while(i<L.length){
+    var l=L[i];
+    if(!l.trim()){i++;continue}
+    if(/^```/.test(l)){var j=i+1;while(j<L.length&&!/^```/.test(L[j]))j++;out.push({t:'code',s:L.slice(i+1,j).join('\n')});i=j+1;continue}
+    var h=l.match(/^(#{1,6})\s+(.*)$/);if(h){out.push({t:'h',lv:h[1].length,s:h[2]});i++;continue}
+    if(/^\s*([-*+]|\d+[.)])\s+/.test(l)){var j=i+1;while(j<L.length&&L[j].trim()&&!/^\s*([-*+]|\d+[.)])\s+/.test(L[j])&&!/^#{1,6}\s/.test(L[j])&&/^\s{2,}/.test(L[j]))j++;
+      out.push({t:'li',ord:/^\s*\d/.test(l),ind:(l.match(/^\s*/)[0].length>=2),s:L.slice(i,j).join('\n').replace(/^\s*([-*+]|\d+[.)])\s+/,''),num:(l.match(/^\s*(\d+)/)||[])[1]});i=j;continue}
+    if(/^\|/.test(l)){var j=i;while(j<L.length&&/^\|/.test(L[j]))j++;out.push({t:'table',s:L.slice(i,j).join('\n')});i=j;continue}
+    var j=i+1;while(j<L.length&&L[j].trim()&&!/^(#{1,6}\s|```|\s*([-*+]|\d+[.)])\s|\|)/.test(L[j]))j++;
+    out.push({t:'p',s:L.slice(i,j).join(' ')});i=j;
+  }
+  return out;
+}
+var REFS={};
+function inline(s){
+  var parts=String(s).split(/(`[^`]+`)/),o='';
+  parts.forEach(function(p){
+    if(/^`[^`]+`$/.test(p)){var inner=p.slice(1,-1),r=REFS[inner];o+=r?'<code class="ref '+r.st+'" title="'+esc(r.why)+'">'+esc(inner)+'</code>':'<code>'+esc(inner)+'</code>';return}
+    var e=esc(p).replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>').replace(/(^|[^*])\*([^*]+)\*/g,'$1<i>$2</i>');
+    Object.keys(REFS).forEach(function(k){if(k.length>4&&e.indexOf(esc(k))>=0)e=e.split(esc(k)).join('<span class="ref '+REFS[k].st+'" title="'+esc(REFS[k].why)+'">'+esc(k)+'</span>')});
+    o+=e;
+  });
+  return o;
+}
+function blockHtml(b){
+  if(b.t==='h')return '<h'+Math.min(b.lv+1,4)+'>'+inline(b.s)+'</h'+Math.min(b.lv+1,4)+'>';
+  if(b.t==='code')return '<pre><code>'+esc(b.s)+'</code></pre>';
+  if(b.t==='li')return '<div style="display:grid;grid-template-columns:'+(b.ind?'40px':'22px')+' 1fr"><span class="muted" style="text-align:right;padding-right:8px">'+(b.ord?esc(b.num)+'.':'•')+'</span><div>'+inline(b.s).replace(/\n\s*/g,'<br>')+'</div></div>';
+  if(b.t==='table'){var rows=b.s.split('\n').filter(function(r){return !/^\|[\s:|-]+\|?$/.test(r)});
+    return '<table>'+rows.map(function(r,ri){var c=r.replace(/^\||\|$/g,'').split('|');return '<tr>'+c.map(function(x){return (ri?'<td>':'<th>')+inline(x.trim())+(ri?'</td>':'</th>')}).join('')+'</tr>'}).join('')+'</table>'}
+  return '<p>'+inline(b.s)+'</p>';
+}
+function quoteOf(b){return (b.s||'').replace(/\s+/g,' ').trim().slice(0,160)}
+function status(){
+  var s=$('#status');
+  if(D.passed){s.className='chip ok';s.textContent='Approved · agent is coding'}
+  else if(D.approved&&D.approved.rev===CUR){s.className='chip ok';s.textContent='Approved rev '+CUR}
+  else{var last=D.replies[D.replies.length-1];
+    if(last&&last.rev===CUR&&last.kind==='changes'){s.className='chip ask';s.textContent='Changes sent · waiting for rev '+(CUR+1)}
+    else{s.className='chip wait';s.textContent='Waiting for you'}}
+}
+function render(){
+  var rev=D.revs[view-1];REFS={};
+  ((rev.checks||{}).refs||[]).forEach(function(r){REFS[r.ref]=r});
+  $('#title').textContent=D.title;document.title=D.title+' · bw plan';
+  status();
+  var rv=$('#revs');rv.innerHTML='';
+  if(D.revs.length>1)D.revs.forEach(function(r){var b=document.createElement('button');b.textContent='Rev '+r.n+(r.n===CUR?' (latest)':'');b.setAttribute('aria-pressed',r.n===view);b.onclick=function(){view=r.n;render()};rv.appendChild(b)});
+  var prev=view>1?blocks(D.revs[view-2].text).map(function(b){return b.t+'|'+b.s}):null;
+  var bl=blocks(rev.text),doc=$('#doc');doc.innerHTML='';
+  var past={};D.replies.filter(function(r){return r.rev===view}).forEach(function(r){(r.comments||[]).forEach(function(c){(past[c.b]=past[c.b]||[]).push({c:c,r:r})})});
+  bl.forEach(function(b,i){
+    var el=document.createElement('section');el.className='blk';el.innerHTML=blockHtml(b);
+    if(prev&&prev.indexOf(b.t+'|'+b.s)<0){el.classList.add('chg');el.title='New or changed in rev '+view}
+    (past[i]||[]).forEach(function(p){var d=document.createElement('div');d.className='past';d.innerHTML='<b>You, '+(p.r.kind==='approval'?'with the approval':'change request')+':</b> '+esc(p.c.text);el.appendChild(d)});
+    if(view===CUR&&!D.passed){
+      var cb=document.createElement('button');cb.className='cbtn';cb.textContent=pending[i]?'Edit comment':'Comment';cb.setAttribute('aria-label','Comment on this part');
+      cb.onclick=function(){openNote(el,i,b)};el.appendChild(cb);
+      if(pending[i]){el.classList.add('has');var n=document.createElement('div');n.className='note';n.innerHTML='<b>Your comment:</b> '+esc(pending[i].text);el.appendChild(n)}
+    }
+    doc.appendChild(el);
+  });
+  side(rev);bar();
+}
+function openNote(el,i,b){
+  var old=el.querySelector('.note');if(old)old.remove();
+  var n=document.createElement('div');n.className='note';
+  n.innerHTML='<label class="small" for="c'+i+'">What should change here?</label><textarea id="c'+i+'"></textarea><div class="row"><button class="btn" data-a="x">'+(pending[i]?'Remove':'Cancel')+'</button><button class="btn primary" data-a="s">Save comment</button></div>';
+  el.appendChild(n);var ta=n.querySelector('textarea');ta.value=pending[i]?pending[i].text:'';ta.focus();
+  n.querySelector('[data-a=s]').onclick=function(){if(ta.value.trim()){pending[i]={b:i,quote:quoteOf(b),text:ta.value.trim()}}else delete pending[i];keep();render()};
+  n.querySelector('[data-a=x]').onclick=function(){delete pending[i];keep();render()};
+}
+function side(rev){
+  var s=$('#side'),h='';var refs=(rev.checks||{}).refs||[];
+  var bad=refs.filter(function(r){return r.st==='bad'}).length,nw=refs.filter(function(r){return r.st==='new'}).length;
+  h+='<div class="card"><h3>Files the plan names, checked in git</h3>';
+  if(!refs.length)h+='<p class="small muted" style="margin:0">The plan names no files. bw can only check drift against files it names.</p>';
+  else{h+='<p class="small muted" style="margin:0 0 8px">'+refs.length+' named · '+(refs.length-bad-nw)+' found'+(nw?' · '+nw+' not in the repo':'')+(bad?' · '+bad+' with a line past the end':'')+'</p><ul>'+
+    refs.map(function(r){return '<li><span class="dot '+r.st+'"></span><span><code>'+esc(r.ref)+'</code><br><span class="muted">'+esc(r.why)+'</span></span></li>'}).join('')+'</ul>'}
+  h+='</div>';
+  if(D.drift){var d=D.drift;h+='<div class="card"><h3>Since you approved</h3>';
+    if(!d.changed.length)h+='<p class="small muted" style="margin:0">No files changed yet.</p>';
+    else{h+='<p class="small" style="margin:0 0 8px">'+d.changed.length+' file'+(d.changed.length===1?'':'s')+' changed.</p>';
+      if(d.unplanned.length)h+='<p class="small" style="margin:0 0 4px"><b>Not in the plan</b></p><ul>'+d.unplanned.map(function(p){return '<li><span class="dot bad"></span><code>'+esc(p)+'</code></li>'}).join('')+'</ul>';
+      if(d.untouched.length)h+='<p class="small" style="margin:8px 0 4px"><b>Planned, not touched yet</b></p><ul>'+d.untouched.map(function(p){return '<li><span class="dot new"></span><code>'+esc(p)+'</code></li>'}).join('')+'</ul>';
+      if(!d.unplanned.length&&!d.untouched.length)h+='<p class="small muted" style="margin:0">Every changed file is in the plan.</p>'}
+    h+='</div>'}
+  var rs=D.replies.slice().reverse();
+  if(rs.length)h+='<div class="card"><h3>Your answers</h3><ul>'+rs.map(function(r){return '<li><span class="dot '+(r.kind==='approval'?'ok':'new')+'"></span><span>'+(r.kind==='approval'?'Approved':'Asked for changes on')+' rev '+r.rev+' · '+fmtTime(r.at)+'<br><span class="muted">'+(r.comments||[]).length+' comment'+((r.comments||[]).length===1?'':'s')+(r.note?' and a note':'')+'</span></span></li>'}).join('')+'</ul></div>';
+  s.innerHTML=h;
+}
+function bar(){
+  var live=view===CUR&&!D.passed,n=Object.keys(pending).length,m=$('#msg');
+  $('#bar').hidden=D.passed;
+  $('#changes').disabled=!live;$('#approve').disabled=!live||(D.approved&&D.approved.rev===CUR);$('#general').disabled=!live;
+  $('#changes').textContent='Request changes'+(n?' ('+n+')':'');
+  if(!TOKEN)m.textContent='Open this page from the link bw printed, or your answer cannot reach the agent.';
+  else if(view!==CUR)m.textContent='You are looking at rev '+view+'. Answer on the latest revision.';
+  else if(D.approved&&D.approved.rev===CUR)m.textContent='Approved. The agent picks this up and starts coding.';
+  else m.textContent=n?n+' comment'+(n===1?'':'s')+' ready to send.':'Comment on any part, or approve as it is.';
+}
+function send(kind){
+  var cs=Object.keys(pending).map(function(k){return pending[k]}),note=$('#general').value.trim(),m=$('#msg');
+  if(kind==='changes'&&!cs.length&&!note){m.textContent='Add a comment on a part of the plan, or a note, first.';return}
+  $('#changes').disabled=$('#approve').disabled=true;m.textContent='Sending…';
+  fetch('/plan-reply',{method:'POST',headers:{'Content-Type':'application/json','X-BW-Token':TOKEN},body:JSON.stringify({plan:D.id,rev:CUR,kind:kind,comments:cs,note:note})})
+    .then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})})
+    .then(function(x){
+      if(!x.ok){m.textContent=x.j.error||'Not sent.';if(x.j.reload)setTimeout(function(){location.reload()},1200);bar();return}
+      pending={};keep();$('#general').value='';
+      D.replies.push({n:x.j.n,kind:kind,rev:CUR,at:Date.now()/1000,comments:cs,note:note});
+      if(kind==='approval')D.approved={rev:CUR,at:Date.now()/1000};
+      render();m.textContent=kind==='approval'?'Approved. The agent picks this up and starts coding.':'Sent. The agent is revising; rev '+(CUR+1)+' opens here when it arrives.';
+    }).catch(function(){m.textContent='The bw server did not answer. Is Claude Code still running?';bar()});
+}
+$('#changes').onclick=function(){send('changes')};
+$('#approve').onclick=function(){send('approval')};
+render();
+if(TOKEN&&window.fetch)setInterval(function(){fetch('/plan-stamp?p='+D.id+'&t='+TOKEN,{cache:'no-store'}).then(function(r){return r.json()}).then(function(j){
+  if(j.rev>CUR||(j.passed&&!D.passed)){$('#banner').hidden=false;$('#bannertext').textContent=j.rev>CUR?'Rev '+j.rev+' is here. Loading it…':'The agent started coding. Loading…';setTimeout(function(){location.reload()},900)}
+}).catch(function(){})},3000);
+</script>
+</body></html>
