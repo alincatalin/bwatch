@@ -1,5 +1,5 @@
 ---
-description: Investigate read-only: answer a question about the code with probes that show it running, before anything is changed (e.g. /bw:how what happens when a trial expires?)
+description: Investigate read-only: answer a question about the code with probes that show it running, before anything is changed (e.g. /bw:how what happens when two requests update the same record?)
 argument-hint: "<question>"
 ---
 The engineer asked: $ARGUMENTS
