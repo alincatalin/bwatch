@@ -283,6 +283,27 @@ def hook_root(inp):
             return r
     return root
 
+WRAPPED = re.compile(r"^\s*<(wake|coordinator-relay|system-note|system-reminder)\b", re.S)
+
+
+def clean_prompt(raw):
+    """Hosted sessions wrap the person's words in machine text (wake envelopes, relays, notes). Keep only the words a
+    person or the coordinator wrote, so task titles and review detection read the real ask."""
+    s = (raw or "").strip()
+    if not WRAPPED.match(s):
+        return s
+    for pat in (r"<message\b[^>]*\bfrom=\"human\"[^>]*>(.*?)</message>",
+                r"<cited\b[^>]*\bauthor=\"user\"[^>]*>(.*?)</cited>",
+                r"<note>(.*?)</note>",
+                r"<message\b[^>]*>(.*?)</message>"):
+        found = [m.strip() for m in re.findall(pat, s, re.S) if m.strip()]
+        if found:
+            return html.unescape("\n".join(found))
+    s = re.sub(r"<(system-note|system-reminder)\b.*?</\1>", " ", s, flags=re.S)
+    s = re.sub(r"<[^>]+>", " ", s)
+    return html.unescape(re.sub(r"[ \t]+", " ", s)).strip() or raw.strip()
+
+
 def hook_prompt(inp):
     root = hook_root(inp)
     if not root or not enabled(root):
@@ -290,7 +311,7 @@ def hook_prompt(inp):
     bwd = bw_dir(root)
     sid = inp.get("session_id", "none")
     d, task = open_task(bwd, sid)
-    prompt = (inp.get("prompt") or "").strip()
+    prompt = clean_prompt(inp.get("prompt") or "")
     # Background-agent completions arrive as prompts; they belong to the task already running, never start one.
     if prompt.startswith("<task-notification>"):
         if task and not task.get("ended"):
