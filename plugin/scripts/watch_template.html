@@ -142,6 +142,7 @@ button.chip:hover{color:var(--ink)}
 .src.git{background:var(--seen-soft);color:var(--seen)}
 .src.key{background:var(--accent-soft);color:var(--accent)}
 .src.unk{background:color-mix(in srgb,var(--warn) 16%,var(--panel));color:var(--warn)}
+.copybar{background:var(--warnbg,#fff4d6);color:inherit;padding:8px 16px;font-size:13px;border-bottom:1px solid var(--line,#ddd)}
 .hint{font-size:12px;color:var(--faint);margin-top:6px}
 .act{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)}
 .act .lbl{margin-right:4px}
@@ -283,6 +284,7 @@ button.chip:hover{color:var(--ink)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head><body>
+<div class="copybar" id="copybar" hidden></div>
 <header class="top">
   <div class="repo"><h1 id="repo"></h1><span class="at" id="headat"></span></div>
   <div class="watch" id="watch" title="What still needs you"></div>
@@ -338,6 +340,7 @@ var LAST_LOOK=D.on||0;
 var DS=D.state||{done:{},picked:{},look:0};
 var TOKEN=(location.search.match(/[?&]t=([0-9a-f]+)/)||[])[1]||'';
 var LIVE=location.protocol.indexOf('http')===0&&!!TOKEN;
+var COPY=/*BW_COPY*/false;
 function post(o){if(!LIVE)return;try{fetch('/state',{method:'POST',headers:{'Content-Type':'application/json','X-BW-Token':TOKEN},body:JSON.stringify(o)}).catch(function(){})}catch(e){}}
 if(DS.look>LAST_LOOK)LAST_LOOK=DS.look;
 try{var ll=+localStorage.getItem(KEY+'-look');if(ll>LAST_LOOK)LAST_LOOK=ll;}catch(e){}
@@ -523,6 +526,7 @@ function itemCard(it){
     b.appendChild(h('div',{cls:'rcpt one'},'<div><span class="lbl">What the code prints now</span>'+outPre(it.after,it.after)+'</div>'));
     var fw='Fix this review finding: '+it.title+'. Probe .bw/probes/'+it.pid+' prints now: '+firstLine(it.after)+'. After the fix the same probe must print something else.';
     b.appendChild(h('div',{cls:'act'},'<span class="lbl">Your call</span><button class="btn pri" data-now="Asked to fix" data-w="'+esc(fw)+'">Fix this</button><button class="btn" data-d="Expected">Expected</button><button class="btn" data-d="Skipped">Skip</button><span class="hint" style="margin:0 0 0 6px">Fix this = the next agent task is told, and its receipt says whether this probe changed. Expected = this output becomes your belief.</span>'));
+    if(COPY)b.appendChild(h('div',{cls:'hint'},'From a cloud thread, say it in chat instead: <b>fix finding '+esc(it.pid)+'</b> · <b>expected '+esc(it.pid)+'</b> · <b>skip '+esc(it.pid)+'</b>'));
   }else if(it.kind==='unshown'){
     b.appendChild(h('div',{cls:'q'},'The agent reported these but wrote no probe that shows them. They are its words, not checked by a run. '+srcTag('unk')));
     b.appendChild(h('ul',{cls:'ulist'},it.list.map(function(x){return '<li>'+x+'</li>'}).join('')));
@@ -721,7 +725,8 @@ function fromHash(){var hsh=location.hash.slice(1);if(['catchup','timeline','beh
 window.addEventListener('hashchange',function(){fromHash();render();});
 document.getElementById('repo').textContent=D.repo;document.getElementById('headat').textContent=D.head;
 if(!HASUSES)document.getElementById('depsbtn').hidden=true;
-document.getElementById('foot').textContent='Built by bw from this repo\'s git history and .git/bw. Receipts marked "executed" are what the repo\'s probes printed when bw ran them on a clean copy of the code at each commit. '+(LIVE?'Your decisions are saved in .git/bw, and the agent is told about them when a later task edits those files.':'Opened as a file, so your decisions stay in this browser. Open it with /bw:home so they reach the agent.')+' Change the map with /bw:map.';
+if(COPY){var cb=document.getElementById('copybar');cb.hidden=false;cb.textContent='Snapshot written by bw at the end of the last cloud task'+(D.head?' (HEAD '+D.head+')':'')+'. Buttons here only stay in this browser: tell Claude in the thread what to do with a finding (fix, expected or skip, plus its name).';}
+document.getElementById('foot').textContent='Built by bw from this repo\'s git history and .git/bw. Receipts marked "executed" are what the repo\'s probes printed when bw ran them on a clean copy of the code at each commit. '+(LIVE?'Your decisions are saved in .git/bw, and the agent is told about them when a later task edits those files.':COPY?'Snapshot from a cloud task: decide in chat with "fix finding <name>", "expected finding <name>" or "skip finding <name>".':'Opened as a file, so your decisions stay in this browser. Open it with /bw:home so they reach the agent.')+' Change the map with /bw:map.';
 fromHash();render();
 })();
 </script>

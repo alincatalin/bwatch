@@ -79,6 +79,10 @@ timestamps, durations, memory addresses and temp paths; each probe runs twice af
 different output on each run is marked flaky and never counted as a change. Limits: `BW_PROBE_TIMEOUT` (30 s per run) and
 `BW_PROBE_BUDGET` (120 s per receipt). `BW_ASK_PROBES=0` stops bw asking the agent for probes.
 
+## Cloud threads
+
+The watch room runs on 127.0.0.1, which a cloud session can't share. When bw runs on the repo named by `BW_REPO` it also writes a static snapshot to `<repo>/watch.html` after every task (or to the file `BW_PAGE` names). Decide findings by writing `fix finding <name>`, `expected finding <name>` or `skip finding <name>` in chat: bw records it from the prompt, even inside the hosted session's wrapper text, and task titles use the person's words, not that wrapper.
+
 ## 0.13.0
 
 - Review mode: a task whose first prompt asks to review or investigate and that changes no code is asked once for finding

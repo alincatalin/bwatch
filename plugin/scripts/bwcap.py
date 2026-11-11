@@ -283,6 +283,7 @@ def hook_root(inp):
             return r
     return root
 
+CHAT_DECISION = re.compile(r"^\s*(fix|expected|skip)\s+finding\s+([\w.-]+)\s*\.?\s*$", re.I)
 WRAPPED = re.compile(r"^\s*<(wake|coordinator-relay|system-note|system-reminder)\b", re.S)
 
 
@@ -319,6 +320,13 @@ def hook_prompt(inp):
             task["notifications"] += 1
             save(os.path.join(d, "task.json"), task)
         return
+    cm = CHAT_DECISION.match(prompt)
+    if cm:
+        f = decide_finding(root, bwd, cm.group(1).lower(), cm.group(2), mode="chat")
+        if f:
+            note = "bw recorded the engineer's decision on review finding %r (probe %s): %s." % (f["finding"], f["pid"], f["status"])
+            if f["status"] != "fix":
+                return {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": note + " Nothing to change; confirm in one line."}}
     if task and not task.get("ended"):
         task.setdefault("prompts", []).append(prompt)  # a follow-up inside the same task
         save(os.path.join(d, "task.json"), task)
@@ -938,7 +946,33 @@ def render_home(bwd, m, root, with_data=False):
     wd = watch_data(bwd, m, root)
     with open(out, "w") as f:
         f.write(tpl.replace("/*BW_DATA*/null", json.dumps(wd).replace("</", "<\\/")))
+    write_copy(root, out)
     return (out, wd) if with_data else out
+
+
+def write_copy(root, page):
+    """Hosted (cloud) sessions can't open the 127.0.0.1 watch room. When bw runs on a repo named by BW_REPO, or when
+    BW_PAGE names a file, keep a static snapshot there after each render (default <repo>/watch.html, gitignored)."""
+    dest = os.environ.get("BW_PAGE")
+    env_repo = os.environ.get("BW_REPO")
+    if not dest and env_repo:
+        try:
+            if os.path.realpath(env_repo) == os.path.realpath(root):
+                dest = os.path.join(root, "watch.html")
+        except Exception:
+            dest = None
+    if not dest:
+        return None
+    try:
+        with open(page) as f:
+            body = f.read().replace("var COPY=/*BW_COPY*/false;", "var COPY=true;", 1)
+        tmp = dest + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(body)
+        os.replace(tmp, dest)
+        return dest
+    except Exception:
+        return None
 
 
 def cards_from_text(text):
@@ -2434,6 +2468,28 @@ def cmd_brief(args):
     return 0
 
 
+def decide_finding(root, bwd, verb, pid, mode="cli"):
+    """Record fix / expected / skip on the latest review finding shown by probe pid. Returns the finding or None."""
+    fs = load_findings(bwd)
+    hit = [(k, f) for k, f in fs["findings"].items() if f["pid"] == probe_id(pid)]
+    if not hit:
+        return None
+    k, f = hit[-1]
+    f["status"] = {"fix": "fix", "expected": "expected", "skip": "skipped"}[verb]
+    f["decided"] = time.time()
+    save(findings_path(bwd), fs)
+    st = load(os.path.join(bwd, "state.json"), {})
+    st.setdefault("done", {})[k] = {"fix": "Asked to fix", "expected": "Expected", "skip": "Skipped"}[verb]
+    save(os.path.join(bwd, "state.json"), st)
+    if verb == "expected":
+        tk = load(os.path.join(bwd, "tasks", f["task"], "task.json"), {}) or {}
+        p = {x["id"]: x for x in load_probes(root, tk.get("end") or "HEAD")}.get(f["pid"])
+        if p:
+            add_belief(root, bwd, p, f["out"], tk.get("end"), task=f["task"], item=k, why="expected from a review finding")
+    use(bwd, "decision", item=k, decision=f["status"], mode=mode)
+    return f
+
+
 def cmd_findings(args):
     """bwcap.py findings [fix|expected|skip <probe-id>]: list review findings, or decide one without the browser."""
     root = repo_root(os.getcwd())
@@ -2442,22 +2498,9 @@ def cmd_findings(args):
     bwd = bw_dir(root)
     fs = load_findings(bwd)
     if args and args[0] in ("fix", "expected", "skip") and len(args) > 1:
-        hit = [(k, f) for k, f in fs["findings"].items() if f["pid"] == probe_id(args[1])]
-        if not hit:
+        f = decide_finding(root, bwd, args[0], args[1], mode="cli")
+        if not f:
             print("bw: no finding with probe %r." % args[1]); return 2
-        k, f = hit[-1]
-        f["status"] = {"fix": "fix", "expected": "expected", "skip": "skipped"}[args[0]]
-        f["decided"] = time.time()
-        save(findings_path(bwd), fs)
-        st = load(os.path.join(bwd, "state.json"), {})
-        st.setdefault("done", {})[k] = {"fix": "Asked to fix", "expected": "Expected", "skip": "Skipped"}[args[0]]
-        save(os.path.join(bwd, "state.json"), st)
-        if args[0] == "expected":
-            tk = load(os.path.join(bwd, "tasks", f["task"], "task.json"), {}) or {}
-            p = {x["id"]: x for x in load_probes(root, tk.get("end") or "HEAD")}.get(f["pid"])
-            if p:
-                add_belief(root, bwd, p, f["out"], tk.get("end"), task=f["task"], item=k, why="expected from a review finding")
-        use(bwd, "decision", item=k, decision=f["status"], mode="cli")
         print("bw: %s -> %s" % (f["finding"], f["status"]))
         return 0
     if not fs["findings"]:
