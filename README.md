@@ -39,9 +39,9 @@ Unzip, then from this folder:
 That installs the plugin, turns bw on for that repo and drafts a map from its folders.
 Restart Claude Code in the repo. Needs claude, python3 and git. Keep this folder: the plugin is installed from it.
 
-For Mosey, use the hand-made map instead of a draft:
+If you already have a hand-made map, pass it instead of a draft:
 
-    bash install.sh ~/work/betafocus/mosey mosey.map.json
+    bash install.sh /path/to/your/repo your.map.json
 
 ## Use
 

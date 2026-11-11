@@ -754,7 +754,7 @@ def watch_data(bwd, m, root):
                     files[pth]["beh"].append(bid)
             cited = sorted({parse_at(st.get("at"))[0] for st in c.get("now", []) if parse_at(st.get("at"))[0]})
             best = min((cls_of.get(x, "repair") for x in c.get("regions", [])), key=_cls_rank, default="repair")
-            # Agents put the right answer in the same slot every time (index 1 in all 6 real Mosey cards), so shuffle,
+            # Agents put the right answer in the same slot every time (index 1 in all 6 real cards we checked), so shuffle,
             # with a fixed seed per card so the order is stable across renders.
             order_k = list(range(len(opts)))
             random.Random("%s-c%d" % (tid, i)).shuffle(order_k)
