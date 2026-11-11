@@ -300,9 +300,10 @@ def clean_prompt(raw):
         found = [m.strip() for m in re.findall(pat, s, re.S) if m.strip()]
         if found:
             return html.unescape("\n".join(found))
+    # Nothing a person wrote (e.g. a "computer linked" status wake): no words to keep. The caller skips such prompts.
     s = re.sub(r"<(system-note|system-reminder)\b.*?</\1>", " ", s, flags=re.S)
     s = re.sub(r"<[^>]+>", " ", s)
-    return html.unescape(re.sub(r"[ \t]+", " ", s)).strip() or raw.strip()
+    return html.unescape(re.sub(r"\s+", " ", s)).strip()
 
 
 def hook_prompt(inp):
@@ -312,7 +313,10 @@ def hook_prompt(inp):
     bwd = bw_dir(root)
     sid = inp.get("session_id", "none")
     d, task = open_task(bwd, sid)
-    prompt = clean_prompt(inp.get("prompt") or "")
+    raw = inp.get("prompt") or ""
+    prompt = clean_prompt(raw)
+    if raw.strip() and not prompt:
+        return  # machine text only (a status wake): neither a new task nor a follow-up
     # Background-agent completions arrive as prompts; they belong to the task already running, never start one.
     if prompt.startswith("<task-notification>"):
         if task and not task.get("ended"):
@@ -418,6 +422,8 @@ def hook_postfail(inp):
     if not task:
         return
     cmd = (inp.get("tool_input") or {}).get("command", "")
+    if inp.get("_via_env") and not about_repo(root, cmd, inp.get("cwd")):
+        return
     code = re.search(r"Exit code (\d+)", str(inp.get("error") or ""))
     task["commands"].append({"cmd": cmd[:500], "t": time.time(), "exit_code": int(code.group(1)) if code else None,
                              "interrupted": bool(inp.get("is_interrupt"))})
@@ -447,6 +453,14 @@ def test_state(root, task):
     return {"st": "passed", "text": "Tests passed on the final code (%s, %s)." % (last["cmd"][:80], when)}
 
 
+def about_repo(root, cmd, cwd=None):
+    """Does a shell command work on this repo: run from inside it, or naming it by path (or through BW_REPO)?"""
+    names = {root, os.path.realpath(root), os.environ.get("BW_REPO", "").strip().rstrip("/")} - {""}
+    if cwd and any(os.path.realpath(cwd) == os.path.realpath(n) or os.path.realpath(cwd).startswith(os.path.realpath(n) + os.sep) for n in names):
+        return True
+    return any(n in (cmd or "") for n in names) or "$BW_REPO" in (cmd or "") or "${BW_REPO}" in (cmd or "")
+
+
 def hook_post(inp):
     root = hook_root(inp)
     if not root or not enabled(root):
@@ -458,6 +472,8 @@ def hook_post(inp):
     tool = inp.get("tool_name", "")
     ti = inp.get("tool_input") or {}
     tr = inp.get("tool_response")
+    if tool == "Bash" and inp.get("_via_env") and not about_repo(root, ti.get("command", ""), inp.get("cwd")):
+        return  # a session outside the repo (BW_REPO) also does unrelated work: log only commands aimed at this repo
     if tool == "Bash":
         entry = {"cmd": ti.get("command", "")[:500], "t": time.time()}
         note_test_run(root, task, ti.get("command", ""), True)
@@ -477,8 +493,11 @@ def hook_post(inp):
     else:
         p = ti.get("file_path") or ti.get("notebook_path") or ti.get("path")
         if p:
-            if os.path.isabs(p) and p.startswith(root + os.sep):
-                p = os.path.relpath(p, root)
+            if os.path.isabs(p):
+                rp = os.path.realpath(p)
+                if not (rp.startswith(os.path.realpath(root) + os.sep) or p.startswith(root + os.sep)):
+                    return  # a file outside this repo
+                p = os.path.relpath(rp, os.path.realpath(root))
             if not p.startswith(".git/"):
                 task["edits"].append({"tool": tool, "file": p, "t": time.time()})
     save(os.path.join(d, "task.json"), task)
@@ -758,7 +777,7 @@ def watch_data(bwd, m, root):
             # with a fixed seed per card so the order is stable across renders.
             order_k = list(range(len(opts)))
             random.Random("%s-c%d" % (tid, i)).shuffle(order_k)
-            items.append({"id": "%s-c%d" % (tid, i), "kind": "predict", "beh": bid, "task": tid, "cls": best, "title": name,
+            items.append({"id": "%s-c%d" % (tid, i), "kind": "predict", "beh": bid, "task": tid, "cls": best, "title": html.escape(name),
                           "regions": creg, "q": c.get("question", ""), "opts": [[chr(97 + k), opts[k]] for k in order_k],
                           "ans": chr(97 + ans), "before": lane(c.get("before", []), c.get("split")), "now": now_lane,
                           "shared": c.get("shared", []), "src": src, "files": cited,
@@ -831,9 +850,10 @@ def watch_data(bwd, m, root):
             t["rc"] = [len(rrows), len(rrows) - len(same)]
         if (data or {}).get("noprobe"):
             items.append({"id": tid + "-np", "kind": "noreceipt", "task": tid, "beh": None, "cls": "migrate",
-                          "title": "No executed evidence for a costly change", "regions": t_regs, "files": tfiles,
-                          "text": html.escape("This task changed %s, marked costly to put right. %s" % (
-                              ", ".join((data or {}).get("costly") or []) or "costly code", data["noprobe"])),
+                          "title": "No executed evidence for this change" if (data or {}).get("seed") else "No executed evidence for a costly change",
+                          "regions": t_regs, "files": tfiles,
+                          "text": html.escape(("This task changed code and the repo has no probe yet. %s" % data["noprobe"]) if (data or {}).get("seed") else
+                              "This task changed %s, marked costly to put right. %s" % (", ".join((data or {}).get("costly") or []) or "costly code", data["noprobe"])),
                           "q": ", ".join(tfiles[:4])})
         if t.get("bulk"):
             items.append({"id": tid + "-bulk", "kind": "bulk", "task": tid, "cls": "undo",
@@ -897,14 +917,14 @@ def watch_data(bwd, m, root):
             explained.update(touched)
             if touched:
                 items.append({"id": "%s-k-%s" % (t["id"], dcs["id"]), "kind": "kept", "beh": None, "task": t["id"], "cls": "answer",
-                              "title": ("Touches a behavior you kept: " if dcs["decision"] == "Kept" else "Touches a behavior you asked to change: ") + dcs["title"],
+                              "title": ("Touches a behavior you kept: " if dcs["decision"] == "Kept" else "Touches a behavior you asked to change: ") + html.escape(dcs["title"]),
                               "regions": list(t["r"].keys())[:3], "files": touched,
                               "text": html.escape("On %s you %s: %s → %s. This task changed %s." % (time.strftime("%b %d", time.localtime(dcs["at"])), "kept it" if dcs["decision"] == "Kept" else "asked for a change", dcs["question"], dcs["behavior"] or "?", ", ".join(touched)))})
         outside = [f for f in fresh.get("files", []) if f not in explained] if fresh.get("st") == "changed" else []
         if outside and dcs.get("task") in {t["id"] for t in tasks}:
             items.append({"id": "%s-x-%s" % (dcs["id"], hashlib.sha1(",".join(outside).encode()).hexdigest()[:8]), "kind": "kept", "beh": None,
                           "task": dcs["task"], "cls": "answer",
-                          "title": "Changed outside an agent task: " + dcs["title"],
+                          "title": "Changed outside an agent task: " + html.escape(dcs["title"]),
                           "regions": [rid[r] for r in {region_of(m, f) for f in outside} if r in rid][:3], "files": outside,
                           "text": html.escape("On %s you %s: %s → %s. Since then %s changed in git, and no agent task bw watched made that change." % (
                               time.strftime("%b %d", time.localtime(dcs["at"])), "kept it" if dcs["decision"] == "Kept" else "asked for a change",
@@ -938,6 +958,31 @@ def watch_data(bwd, m, root):
             "files": sorted(files.values(), key=lambda f: f["p"])[:400]}
 
 
+# Watch-room fields the page escapes itself, or that hold HTML bw already escaped. Everything else that reaches the page
+# (task titles from commit messages and prompts, region and behavior names, steps, decisions) is text, escaped here, so
+# a commit subject like <img onerror=...> shows as text instead of running with the page's token.
+PAGE_RAW_TOP = {"items", "state", "repo", "head"}
+PAGE_ITEM_ESC = {"revisit"}
+PREDICT_ESC = {"opts", "before", "now", "shared"}  # older prose cards: the agent's text, shown as steps and options
+
+
+def _esc_all(x):
+    if isinstance(x, str):
+        return html.escape(x, quote=True)
+    if isinstance(x, list):
+        return [_esc_all(v) for v in x]
+    if isinstance(x, dict):
+        return {k: _esc_all(v) for k, v in x.items()}
+    return x
+
+
+def page_safe(wd):
+    out = {k: (v if k in PAGE_RAW_TOP else _esc_all(v)) for k, v in wd.items()}
+    out["items"] = [{k: (_esc_all(v) if k in PAGE_ITEM_ESC or (it.get("kind") == "predict" and k in PREDICT_ESC) else v)
+                     for k, v in it.items()} for it in wd.get("items", [])]
+    return out
+
+
 def render_home(bwd, m, root, with_data=False):
     here = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(here, "watch_template.html")) as f:
@@ -945,7 +990,7 @@ def render_home(bwd, m, root, with_data=False):
     out = os.path.join(bwd, "home.html")
     wd = watch_data(bwd, m, root)
     with open(out, "w") as f:
-        f.write(tpl.replace("/*BW_DATA*/null", json.dumps(wd).replace("</", "<\\/")))
+        f.write(tpl.replace("/*BW_DATA*/null", json.dumps(page_safe(wd)).replace("</", "<\\/")))
     write_copy(root, out)
     return (out, wd) if with_data else out
 
@@ -1345,6 +1390,11 @@ def hook_stop(inp):
         except Exception as e:
             rc["intent_error"] = repr(e)[:300]
     shown = bool(rc and any(r.get("changed") for r in rc["rows"]))
+    # First run: a repo with no probe at all gets nothing from receipts, whatever the map says. Until the first probe
+    # exists, any change to code (not tests, docs or build files) gets one probe request, so value starts with the next task.
+    seed = bool(files) and not probes and not asking and any(is_code(f["path"]) for f in files)
+    if seed:
+        asking = ["first probes for this repo"]
     want_probe = bool(asking or (acts and files))
     if want_probe and not shown and task.get("asks", 0) < MAX_ASK_ROUNDS and not inp.get("stop_hook_active") \
             and os.environ.get("BW_ASK_PROBES", "1") == "1":
@@ -1371,7 +1421,9 @@ def hook_stop(inp):
     if want_probe and not shown:
         data["noprobe"] = no_probe_reason(last) or prior_noprobe or ("The agent wrote no probe that shows a change." if task.get("probe_ask")
                                                                      else "No probe in .bw/probes/ shows this change.")
-        data["costly"] = asking
+        data["costly"] = [] if seed else asking
+        if seed:
+            data["seed"] = 1
     save(os.path.join(d, "data.json"), data)
     out = render(data, os.path.join(d, "debrief.html"))
     task["ended"] = time.time()
@@ -1490,6 +1542,8 @@ def load_probes(root, commit):
         for k in ("finding", "role", "entry"):
             if isinstance(spec.get(k), str) and spec[k].strip():
                 p[k] = spec[k].strip()[:300]
+        if isinstance(spec.get("functions"), list):  # optional: the functions the probe drives, for the hollow check
+            p["functions"] = [f for f in spec["functions"] if isinstance(f, str) and re.match(r"^[A-Za-z_]\w*$", f)][:20]
         out[p["id"]] = p
     return [out[k] for k in sorted(out)]
 
@@ -1773,6 +1827,14 @@ def probe_help(script=None, since="<commit before your change>"):
 
 
 def probe_reason(task, regions_hit, files, acts=()):
+    if regions_hit == ["first probes for this repo"]:
+        regions_hit = []
+        lines = ["bw: this repo has no behavior probes yet, so nothing shows what this change does when it runs.",
+                 "Before finishing, add 1 to 3 probes for the behavior this task touched, so the engineer sees it executed now and "
+                 "every later task re-runs them. Do not change other code in this step.",
+                 probe_help(since=task["start"][:12]),
+                 "The code before this task is commit %s. Changed files: %s" % (task["start"][:12], ", ".join(f["path"] for f in files[:30]) + (" ..." if len(files) > 30 else ""))]
+        return "\n".join(lines)
     lines = [
         ("bw: this task changed regions the engineer marked as costly to put right (%s), and no probe shows that behavior "
          "changing." % ", ".join(regions_hit)) if regions_hit else
@@ -1945,6 +2007,9 @@ def cmd_agents_md(args):
 CODE_EXT = {".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".kt", ".kts", ".java", ".swift", ".go", ".rs", ".rb", ".php",
             ".cs", ".c", ".cc", ".cpp", ".h", ".m", ".scala", ".dart", ".vue", ".svelte", ".sql", ".ex", ".exs"}
 AROUND = re.compile(r"(^|/)([^/]*tests?(ing)?[^/]*|docs?(_src|_examples)?|spec|specs|examples?|samples?|benchmarks?|scripts?|\.github|ci|build-logic|buildSrc|gradle|assets?|fixtures?|vendor|third_party|node_modules)(/|$)", re.I)
+# Folders that never hold the product's own code. `scripts/`, `ci/`, `gradle/` and the like are only "around the code" while
+# other code exists: a repo whose code all lives in plugin/scripts/ must still get code regions.
+NOT_CODE = re.compile(r"(^|/)([^/]*tests?(ing)?[^/]*|docs?(_src|_examples)?|spec|specs|examples?|samples?|fixtures?|vendor|third_party|node_modules)(/|$)|^\.bw/", re.I)
 # Put-right class from words in the path: a coarse first guess that the engineer corrects in the map file.
 CLASS_WORDS = [
     ("answer", r"bill|pay|purchas|subscri|paywall|checkout|price|invoice|wallet|money|auth|login|signin|sign_in|identity|account|session|token|secret|crypt|sign|tls|ssl|cert|permission|privacy|consent|security"),
@@ -1995,12 +2060,18 @@ def _groups(code, prefix):
     return sorted(groups.items(), key=lambda kv: -len(kv[1]))
 
 
+def is_code(path):
+    """A source file of the product, not a test, doc, fixture, vendored file or a bw probe."""
+    return os.path.splitext(path)[1].lower() in CODE_EXT and not NOT_CODE.search(path) and not TEST_PATH.search(path)
+
+
 def draft_map(root, max_regions=12):
     """Regions from the folder structure alone: descend through folders that hold nearly all the code,
     make one region per sub-folder (or file), and split a region that still holds over half the code.
     No LLM; the class is a guess from path words that the engineer corrects."""
     files = [f for f in git(["ls-tree", "-r", "--name-only", "HEAD"], root, check=False).splitlines() if f]
-    code = [f for f in files if os.path.splitext(f)[1].lower() in CODE_EXT and not AROUND.search(f)]
+    src = [f for f in files if os.path.splitext(f)[1].lower() in CODE_EXT and not NOT_CODE.search(f)]
+    code = [f for f in src if not AROUND.search(f)] or src
     prefix = _descend(code, "")
     ranked = _groups(code, prefix)
     if ranked and len(ranked[0][1]) > 0.5 * len(code) and "/" in ranked[0][1][0][len(prefix):]:
@@ -2109,6 +2180,8 @@ def cmd_on(args):
     print("bw is on for %s" % root)
     print("  map: %d regions, %s" % (len(m.get("regions", [])), how))
     print("  probes are asked for when these change: %s" % (", ".join(asks) if asks else "no region yet"))
+    if not load_probes(root, "HEAD"):
+        print("  no probes yet: the next task that changes code is asked for its first probes (or ask for a review)")
     print("  change what counts as costly: /bw:map <region> costly  (or: cheap, fix, critical)")
     print("  home: %s#catchup" % home_url(root, bwd))
     print("  turn off: python3 %s off %s" % (os.path.abspath(__file__), root))
@@ -2209,6 +2282,10 @@ def cmd_stats(args):
             d["runs"].add(e.get("run"))
             for key, val in (("need", e.get("items")), ("notest", e.get("notest"))):
                 (d[key].add if val else d[key].discard)(e.get("run"))
+        elif e["ev"] == "review":  # a review or /bw:how task ends in review mode, not in the normal stop
+            r = e.get("run") or e.get("task")
+            d["runs"].add(r)
+            (d["need"].add if (e.get("shown") or e.get("unshown")) else d["need"].discard)(r)
         elif e["ev"] == "opened":
             if not d["opened"] or e["at"] - d["opened"][-1] > 600:  # reloads within 10 minutes count once
                 d["opened"].append(e["at"])
@@ -2337,7 +2414,7 @@ def review_stop(root, bwd, task, d, inp, sess):
         sess["last"]["opened"] = run
     save(session_file(bwd, task["session"]), sess)
     shown = [r for r in rows if r["verdict"] == "shown"]
-    use(bwd, "review", task=task["id"], shown=len(shown), unshown=len(unshown), cant=len(rows) - len(shown))
+    use(bwd, "review", task=task["id"], run=task.get("run") or task["id"], shown=len(shown), unshown=len(unshown), cant=len(rows) - len(shown))
     url = home_url(root, bwd) + "#catchup"
     if not opened and os.environ.get("BW_OPEN", "1") == "1":
         open_page(url)
@@ -2716,6 +2793,57 @@ MUTATIONS = [(r"==", "!="), (r"!=", "=="), (r"<=", "<"), (r">=", ">"), (r"(?<![<
 SKIP_MUT = re.compile(r"^\s*(#|//|\*|/\*|import |from |package |\"\"\"|''')")
 
 
+FUNC_START = re.compile(r"^(\s*)(?:(?:export|public|private|protected|internal|static|async|override|suspend|pub)\s+)*"
+                        r"(?:def|function|func|fn|fun|sub)\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)"
+                        r"|^(\s*)(?:export\s+)?(?:const|let|var)\s+([A-Za-z_]\w*)\s*=\s*(?:async\s*)?(?:function\b|\([^)]*\)\s*=>)")
+
+
+def func_blocks(text):
+    """{name: [(first, last) line index]} for functions in any common language: a block runs from its `def`/`function`/
+    `func`/`fn` line to the line before the next non-blank line indented no deeper (a closing brace stays in)."""
+    lines = text.split("\n")
+    out = {}
+    for i, line in enumerate(lines):
+        m = FUNC_START.match(line)
+        if not m:
+            continue
+        ind, name = (m.group(1), m.group(2)) if m.group(2) else (m.group(3), m.group(4))
+        j = i + 1
+        while j < len(lines):
+            l = lines[j]
+            if l.strip() and len(l) - len(l.lstrip()) <= len(ind):
+                if l.strip()[0] in "})]":
+                    j += 1
+                break
+            j += 1
+        out.setdefault(name, []).append((i, j - 1))
+    return out
+
+
+def aimed_lines(texts, probe_text, only=None):
+    """Line indexes inside the functions a probe names, plus the functions those call (one step), per covered file.
+    Empty when the probe names none of them: then breaks are spread over the whole file."""
+    words = set(re.findall(r"[A-Za-z_]\w{2,}", probe_text))
+    blocks = {c: func_blocks(t) for c, t in texts.items()}
+    chosen = {c: {n for n in b if n in (set(only) if only else words)} for c, b in blocks.items()}
+    for c, t in ({} if only else texts).items():  # one step down: functions the named ones call
+        lines = t.split("\n")
+        calls = set()
+        for n in chosen[c]:
+            for a, z in blocks[c][n]:
+                calls |= set(re.findall(r"([A-Za-z_]\w*)\s*\(", "\n".join(lines[a:z + 1])))
+        chosen[c] |= {n for n in blocks[c] if n in calls}
+    out = {}
+    for c in texts:
+        idx = set()
+        for n in chosen[c]:
+            for a, z in blocks[c][n]:
+                idx |= set(range(a + 1, z + 1))  # the body, not the signature
+        if idx:
+            out[c] = (idx, sorted(chosen[c]))
+    return out
+
+
 def cmd_hollow(args):
     """bwcap.py hollow <probe-id> [--n 6]: plant small breaks (== to !=, < to <=, true to false, and to or) one at a time in
     the code the probe covers, on a throwaway copy, and count how many change the probe's output. None = the probe may be
@@ -2736,10 +2864,14 @@ def cmd_hollow(args):
     ref = run_probe(root, base, p)
     if ref["exit"] in CANT_TELL_EXIT:
         print("bw: the probe does not run (%s)." % cant_tell_why(ref)); return 1
+    texts = {c: show(root, now, c) or "" for c in covers}
+    aim = aimed_lines(texts, p["cmd"] + "\n" + "\n".join(p.get("files", {}).values()), p.get("functions"))
     cands = []
     for c in covers:
-        for i, line in enumerate((show(root, now, c) or "").splitlines()):
+        for i, line in enumerate(texts[c].split("\n")):
             if SKIP_MUT.match(line) or len(line) > 300:
+                continue
+            if aim and (c not in aim or i not in aim[c][0]):
                 continue
             for rx, rep in MUTATIONS:
                 if re.search(rx, line):
@@ -2768,6 +2900,12 @@ def cmd_hollow(args):
     if not tried:
         print("bw: no line in %s has a comparison or boolean bw can flip." % ", ".join(covers)); return 0
     print("bw hollow check: %s\n  %d of %d planted breaks changed the output." % (p["id"], len(caught), len(tried)))
+    if aim:
+        names = sorted({n for _, ns in aim.values() for n in ns})
+        print("  aimed at %s: %s" % ("the functions the probe lists" if p.get("functions") else "the code the probe calls",
+                                     ", ".join(names[:12]) + (" …" if len(names) > 12 else "")))
+    else:
+        print("  the probe names no function in its covered files, so breaks were planted anywhere in them")
     for c, ln, src, hit in tried:
         print("  %s %s:%d  %s" % ("caught" if hit else "missed", c, ln, src))
     if not caught:
@@ -2998,6 +3136,20 @@ def hook_plan(inp):
     return {"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "deny", "message": msg}}}
 
 
+def real_python(exe):
+    """The interpreter a command names is the system's Python, not a file the agent could have written: the bare name
+    `python3`/`python` (found on PATH), or an absolute path that is this Python or the PATH one. `./python3`,
+    `/tmp/x/python3` or any other file named python3 is not trusted."""
+    if exe in ("python3", "python"):
+        found = shutil.which(exe)
+        return bool(found) and not os.path.realpath(found).startswith(os.path.realpath(os.getcwd()) + os.sep)
+    if not os.path.isabs(exe) or os.path.basename(exe) not in ("python3", "python"):
+        return False
+    real = os.path.realpath(exe)
+    trusted = {os.path.realpath(sys.executable)} | {os.path.realpath(w) for w in (shutil.which("python3"), shutil.which("python")) if w}
+    return real in trusted
+
+
 def hook_allow(inp):
     """PreToolUse on Bash: allow exactly bw's own `plan wait` / `plan reply` commands, with no shell syntax around them."""
     cmd = str((inp.get("tool_input") or {}).get("command") or "").strip()
@@ -3007,7 +3159,7 @@ def hook_allow(inp):
         argv = shlex.split(cmd)
     except ValueError:
         return None
-    if len(argv) != 5 or os.path.basename(argv[0]) not in ("python3", "python") or argv[2] != "plan" or argv[3] not in ("wait", "reply", "open"):
+    if len(argv) != 5 or not real_python(argv[0]) or argv[2] != "plan" or argv[3] not in ("wait", "reply", "open"):
         return None
     if os.path.realpath(os.path.expanduser(argv[1])) != os.path.realpath(os.path.abspath(__file__)):
         return None

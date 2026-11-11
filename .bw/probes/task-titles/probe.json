@@ -1,0 +1,1 @@
+{"scenario": "a hosted session sends prompts wrapped in machine text (a person's message, a coordinator relay, a computer-linked status note) or a plain prompt; what title does bw give the task?", "cmd": "python3 .bw/probes/task-titles/run.py", "covers": ["plugin/scripts/bwcap.py"], "entry": "UserPromptSubmit hook (hook prompt)", "functions": ["clean_prompt", "task_title"]}

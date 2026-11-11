@@ -1,0 +1,1 @@
+{"scenario": "the local use log holds one normal task, one review with findings and one review with nothing found; how many runs, and runs for you, does /bw:stats report?", "cmd": "python3 .bw/probes/stats-counts/run.py", "covers": ["plugin/scripts/bwcap.py"], "entry": "/bw:stats", "functions": ["cmd_stats"]}

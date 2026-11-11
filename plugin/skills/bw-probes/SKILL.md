@@ -17,7 +17,8 @@ A probe runs one situation through the real code and prints what happens. bw run
  "covers": ["src/billing/fees.py"],
  "entry": "optional: how a user gets there, e.g. Settings > Plan > Cancel, `app export --csv`, POST /invoices",
  "finding": "optional, review tasks only: one line, what is wrong or surprising, in the user's words",
- "role": "optional: \"safety\" for the one fact this change is safe because of"}
+ "role": "optional: \"safety\" for the one fact this change is safe because of",
+ "functions": ["optional: the functions the probe drives, so `bwcap.py hollow` plants breaks there"]}
 ```
 
 ## Rules

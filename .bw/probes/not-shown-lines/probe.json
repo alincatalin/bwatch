@@ -1,2 +1,1 @@
-{"scenario": "the agent ends a review with findings it could not show; which lines does bw list as not shown?",
- "cmd": "python3 .bw/probes/not-shown-lines/run.py", "covers": ["plugin/scripts/bwcap.py"], "entry": "Stop hook, review mode"}
+{"scenario": "the agent ends a review with findings it could not show; which lines does bw list as not shown?", "cmd": "python3 .bw/probes/not-shown-lines/run.py", "covers": ["plugin/scripts/bwcap.py"], "entry": "Stop hook, review mode", "functions": ["finding_lines"]}

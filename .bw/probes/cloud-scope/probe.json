@@ -1,0 +1,1 @@
+{"scenario": "a cloud session works outside the repo and reaches it through BW_REPO; which of its shell commands does bw log against the repo's task?", "cmd": "python3 .bw/probes/cloud-scope/run.py", "covers": ["plugin/scripts/bwcap.py"], "entry": "PostToolUse Bash hook with BW_REPO", "functions": ["about_repo"]}

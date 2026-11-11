@@ -83,6 +83,25 @@ different output on each run is marked flaky and never counted as a change. Limi
 
 The watch room runs on 127.0.0.1, which a cloud session can't share. When bw runs on the repo named by `BW_REPO` it also writes a static snapshot to `<repo>/watch.html` after every task (or to the file `BW_PAGE` names). Decide findings by writing `fix finding <name>`, `expected finding <name>` or `skip finding <name>` in chat: bw records it from the prompt, even inside the hosted session's wrapper text, and task titles use the person's words, not that wrapper.
 
+## 0.13.1
+
+Fixes from running bw fresh on its own repo (a real agent review steered only by bw's hooks).
+
+- Security: the watch room escapes every text that comes from commits, prompts or agents (a commit subject with HTML
+  showed as script on a page that holds the token for decisions and plan approvals). The Bash auto-allow for
+  `plan wait|reply|open` trusts only the system Python (`python3` on PATH or its absolute path), not any file named python3.
+- Map draft: code under a `scripts/` folder (or `ci/`, `gradle/`) gets code regions when no other code exists, so a repo
+  whose code all lives in `plugin/scripts/` is no longer mapped as tests, docs and build only. `.bw/` is never mapped as code.
+- First probes: until a repo has a probe, any task that changes code (not tests, docs or build files) is asked once for its
+  first 1 to 3 probes, whatever the map class. `bw on` says so.
+- Hollow check aims its planted breaks at the functions a probe calls (names found in its script, plus what those call), or at
+  the optional `"functions": ["name", ...]` the probe lists, instead of random lines anywhere in the covered files.
+- `/bw:stats` counts review and `/bw:how` tasks as runs.
+- Hosted sessions: a prompt that is only machine text (a "computer linked" status note) no longer opens or titles a task.
+  With `BW_REPO`, bw logs only commands run in the repo or naming it, and never edits to files outside it.
+- `dogfood/fresh-run.sh`: install bw from this folder into a clean copy of a repo with isolated Claude settings and no
+  project memory, then run one real agent task, to see bw as a new user would.
+
 ## 0.13.0
 
 - Review mode: a task whose first prompt asks to review or investigate and that changes no code is asked once for finding
