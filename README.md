@@ -46,7 +46,7 @@ plugin from it).
 Work as usual. When the agent finishes, the watch room opens (macOS) and its link appears in the chat.
 If the task touched a region marked costly or critical and no probe shows a change, the agent first writes probes (about a minute).
 
-- Map: `/bw:map` shows it; `/bw:map <region> costly` (or cheap, fix, critical) changes one.
+- Map: `/bw:map` shows which areas make bw ask for probes and the folders each covers; `/bw:map <number or name> costly` (or cheap, normal, critical) changes one.
 - Watch room any time: `/bw:home`. Setup check: `/bw:doctor`.
 - Turn off: `/bw:off`. In repos where bw is not on, it does nothing.
 - Uninstall: `claude plugin uninstall bw@bw`.
@@ -91,6 +91,13 @@ different output on each run is marked flaky and never counted as a change. Limi
 ## Cloud threads
 
 The watch room runs on 127.0.0.1, which a cloud session can't share. When bw runs on the repo named by `BW_REPO` it also writes a static snapshot to `<repo>/watch.html` after every task (or to the file `BW_PAGE` names). Decide findings by writing `fix finding <name>`, `expected finding <name>` or `skip finding <name>` in chat: bw records it from the prompt, even inside the hosted session's wrapper text, and task titles use the person's words, not that wrapper.
+
+## 0.14.1
+
+- `/bw:map` is readable: areas that make bw ask for probes are listed apart from the rest, each with the folders it
+  covers, and the levels are explained in plain words (no more "cards"). The "fix" level is now called "normal" (fix still
+  works). Change a region by its number: `/bw:map 7 costly`.
+- Map drafts give two folders that got the same name distinct names.
 
 ## 0.14.0
 

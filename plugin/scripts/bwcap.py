@@ -2114,6 +2114,15 @@ def draft_map(root, max_regions=12):
         regions.append({"name": name, "class": guess_class(key), "layer": "code", "paths": [base + key if single else base + key + "/**"]})
     if len(entries) > max_regions:
         regions.append({"name": "Other code", "class": "repair", "layer": "code", "paths": ["**"]})
+    seen = {}
+    for r in regions:  # two folders can get the same name; add the folder they sit in
+        seen.setdefault(r["name"], []).append(r)
+    for name, same in seen.items():
+        if len(same) > 1:
+            for r in same:
+                p = r["paths"][0].rstrip("*").rstrip("/")
+                where = "/".join(p.split("/")[-2:]) if p else os.path.basename(root)
+                r["name"] = "%s [%s]" % (name, where)
     # No folder name says "costly" (hono, okhttp): without a fallback bw would never ask for a card.
     # Mark the two biggest code regions as migrate and say why, so the engineer can move the mark.
     if regions and not any(r["class"] in ("answer", "migrate") for r in regions):
@@ -2127,7 +2136,7 @@ def draft_map(root, max_regions=12):
         {"name": "Build & CI", "class": "repair", "layer": "around the code", "paths": [".github/**", "**/*.gradle*", "**/package.json", "**/pyproject.toml", "**/Cargo.toml", "**/go.mod", "**/*.lock", "**/Dockerfile", "build-logic/**", "gradle/**"]},
     ]
     return {"draft": True, "layers": ["code", "around the code"], "regions": around + regions,
-            "note": "Drafted by bw from folder names. Rename regions, fix each class (undo, repair, migrate, answer) and delete this note."}
+            "note": "Drafted by bw from folder names. Rename regions, set each level with /bw:map (cheap, normal, costly, critical) and delete this note."}
 
 
 def backfill(root, bwd, m, n):
@@ -2187,7 +2196,7 @@ def cmd_on(args):
     print("bw is on for %s" % root)
     print("  setup     %s - %s" % (", ".join(setup), "; ".join(bad) if bad else "ok"))
     print("  map       %d regions, %s%s" % (len(m.get("regions", [])), how, (" (costly: %s)" % ", ".join(asks)) if asks else ""))
-    print("            change one: /bw:map <region> costly   (or cheap, fix, critical)")
+    print("            see them: /bw:map   change one: /bw:map <number or name> costly  (or cheap, normal, critical)")
     print("")
     print("  what happens now")
     print("  - Work as usual. When a task changes code, bw runs small probe commands on the code")
@@ -2212,11 +2221,13 @@ def cmd_on(args):
     print("  turn bw off here: /bw:off     everything bw keeps is in .git/bw/ and ~/.config/bw/")
 
 
-USER_CLASS = {"undo": "undo", "cheap": "undo", "repair": "repair", "fix": "repair", "migrate": "migrate", "costly": "migrate",
-               "answer": "answer", "critical": "answer"}
-CLASS_SAY = {"undo": "cheap", "repair": "fix", "migrate": "costly", "answer": "critical"}
-CLASS_HELP = {"undo": "easy to undo, no cards", "repair": "a bug here is fixable, no cards",
-              "migrate": "data or contracts to migrate, cards asked", "answer": "money, auth or users, cards asked"}
+USER_CLASS = {"undo": "undo", "cheap": "undo", "repair": "repair", "fix": "repair", "normal": "repair", "migrate": "migrate",
+               "costly": "migrate", "answer": "answer", "critical": "answer"}
+CLASS_SAY = {"undo": "cheap", "repair": "normal", "migrate": "costly", "answer": "critical"}
+CLASS_HELP = {"undo": "easy to undo; bw never asks for probes here",
+              "repair": "a bug here is fixable; bw does not ask for probes",
+              "migrate": "a mistake means migrating data or breaking a contract; bw asks for probes when it changes",
+              "answer": "money, auth or people's data; bw asks for probes when it changes"}
 
 
 def cmd_map(args):
@@ -2235,21 +2246,47 @@ def cmd_map(args):
         parts = words.rsplit(None, 1)
         cls = USER_CLASS.get(parts[-1].lower()) if len(parts) == 2 else None
         if not cls:
-            print("bw: say a region and a class, e.g. /bw:map Billing costly. Classes: undo, repair, migrate (costly), answer (critical).")
+            print("bw: say a region (name or number) and a level, e.g. /bw:map Billing costly or /bw:map 7 critical.")
+            print("     Levels: cheap, normal, costly, critical.")
             return
         want = parts[0].lower().strip("\"' ")
-        hit = [r for r in regs if r["name"].lower() == want] or [r for r in regs if want in r["name"].lower()]
+        if want.isdigit() and 1 <= int(want) <= len(regs):
+            hit = [regs[int(want) - 1]]
+        else:
+            hit = [r for r in regs if r["name"].lower() == want] or [r for r in regs if want in r["name"].lower()]
         if len(hit) != 1:
-            print("bw: %s region matches '%s'. Regions: %s" % ("no" if not hit else "more than one", parts[0], ", ".join(r["name"] for r in (hit or regs))))
+            print("bw: %s region matches '%s'. Use its number from /bw:map instead." % ("no" if not hit else "more than one", parts[0]))
             return
         hit[0]["class"] = cls
         hit[0].pop("why", None)
         save(mp, m)
         render_home(bwd, m, root)
-        print("bw: %s is now %s (%s)." % (hit[0]["name"], CLASS_SAY[cls], CLASS_HELP[cls]))
-    for i, r in enumerate(regs):
-        c = r.get("class", "repair")
-        print("%2d. %-30s %-8s %s%s" % (i + 1, r["name"], CLASS_SAY.get(c, c), CLASS_HELP.get(c, ""), ("  [" + r["why"] + "]") if r.get("why") else ""))
+        print("bw: %s is now %s: %s." % (hit[0]["name"], CLASS_SAY[cls], CLASS_HELP[cls]))
+        print("")
+    print_map(regs, m.get("draft"))
+
+
+def print_map(regs, draft=False):
+    """The map as a person reads it: which areas make bw ask the agent for probes, and the folders each one covers."""
+    print("The areas of this repo bw tracks%s. When a task changes code in a costly or critical area" % (" (guessed from folder names)" if draft else ""))
+    print("and no probe shows the change, bw asks the agent to write probes before it finishes.")
+    print("")
+    w = max([len(r["name"]) for r in regs] + [10])
+    for want, title in ((("answer", "migrate"), "bw asks for probes when these change"), (("repair", "undo"), "bw does not ask")):
+        rows = [(i, r) for i, r in enumerate(regs) if r.get("class", "repair") in want]
+        if not rows:
+            continue
+        print(title)
+        for i, r in rows:
+            c = r.get("class", "repair")
+            paths = ", ".join(p.replace("/**", "/") for p in r.get("paths", []))
+            if len(paths) > 60:
+                paths = paths[:57] + "..."
+            print("  %2d. %-*s  %-8s  %s%s" % (i + 1, w, r["name"], CLASS_SAY.get(c, c), paths, ("  (" + r["why"] + ")") if r.get("why") else ""))
+        print("")
+    print("Levels: cheap = easy to undo. normal = a bug is fixable. costly = data or contracts to migrate.")
+    print("        critical = money, auth or people's data. Only costly and critical make bw ask for probes.")
+    print("Change one: /bw:map <number or name> <cheap|normal|costly|critical>   e.g. /bw:map 12 costly")
 
 
 def cmd_do(args):
@@ -3470,7 +3507,7 @@ def render_plan(bwd, root, pid):
 # There is no field that can hold a path, a file or region name, code, a prompt, probe output or a finding: that is the
 # privacy guarantee, not scrubbing. Error messages and tracebacks stay in the local errors.log under a short id.
 
-BW_VERSION = "0.14.0"
+BW_VERSION = "0.14.1"
 TELE_HOST = os.environ.get("BW_TELEMETRY_HOST", "https://us.i.posthog.com")
 TELE_KEY = os.environ.get("BW_TELEMETRY_KEY", "phc_sQTYuZwYQkN3HKFiVo2d2XZ3VJB3YUjCEzYJQWPxZB7t")  # public project key (write-only); empty = never send
 TELE_SEND_EVERY = 20 * 3600
