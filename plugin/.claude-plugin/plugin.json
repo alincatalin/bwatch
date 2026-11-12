@@ -1,6 +1,6 @@
 {
   "name": "bw",
-  "version": "0.13.1",
+  "version": "0.14.0",
   "description": "Investigate read-only, prove findings by running them, then edit: review findings come back as probes you pick to fix, each agent task ends with an executed receipt grouped by what you asked for, and you are told when a behavior you kept stops being true. Any repo, any language.",
   "author": {
     "name": "Alin"

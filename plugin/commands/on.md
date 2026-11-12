@@ -1,7 +1,7 @@
 ---
-description: Turn bw on for this repo (drafts a map from the folders, or keeps the existing one)
+description: Turn bw on for this repo (drafts a map from the folders, or keeps the existing one) and show what happens next
 allowed-tools: Bash(python3:*)
 ---
 !`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/bwcap.py" on`
 
-Tell the user in two short lines what bw printed above: that bw is on, how many regions the map has, and the link to the watch room (the file:// line). Do nothing else.
+Show the user what bw printed above, exactly as printed, in a code block. Add nothing before or after it, and do nothing else.

@@ -83,11 +83,7 @@ def repo_root(cwd):
         # "not a git repository" is normal; anything else (e.g. git's "dubious ownership" refusal) silently turns bw
         # off, so leave a trace where hook errors go.
         if "not a git repository" not in str(e):
-            try:
-                with open(os.path.join(os.path.expanduser("~"), ".bw-capture-errors.log"), "a") as f:
-                    f.write("%s repo_root(%s): %s\n" % (time.ctime(), cwd, str(e)[:300]))
-            except Exception:
-                pass
+            tele_error("repo_root", e)
         return None
 
 
@@ -176,6 +172,10 @@ def use(bwd, ev, **kw):
     try:
         with open(os.path.join(bwd, "use.jsonl"), "a") as f:
             f.write(json.dumps(dict(ev=ev, at=round(time.time()), **kw)) + "\n")
+    except Exception:
+        pass
+    try:
+        tele_use(bwd, ev, kw)
     except Exception:
         pass
 
@@ -362,6 +362,7 @@ def hook_prompt(inp):
             brief = None
     if brief:
         task["brief"] = brief
+        tele_count(bwd, {"brief_sent": 1})
     save(os.path.join(d, "task.json"), task)
     sess["open"] = tid
     save(session_file(bwd, sid), sess)
@@ -1383,7 +1384,7 @@ def hook_stop(inp):
     try:
         rc = receipt(root, bwd, task["start"], task["end"], probes) if probes else None
     except Exception as e:
-        rc = {"rows": [], "error": repr(e)[:300]}
+        rc = {"rows": [], "error": repr(e)[:300], "error_id": tele_error("receipt", e, bwd)}
     if rc and rc.get("rows"):
         try:
             mark_intent(root, bwd, task, rc)
@@ -1410,7 +1411,7 @@ def hook_stop(inp):
             broken, checked, skipped = check_beliefs(root, bwd, task["end"], [f["path"] for f in files], task["id"], who=person(root))
             bel = {"checked": checked, "broken": [b["id"] for b in broken], "skipped": skipped}
         except Exception as e:
-            bel = {"checked": 0, "broken": [], "error": repr(e)[:300]}
+            bel = {"checked": 0, "broken": [], "error": repr(e)[:300], "error_id": tele_error("beliefs", e, bwd)}
     cards = load(cards_path, {"cards": []})  # older tasks may hold prose cards; new tasks get receipts instead
     account = task.get("account") or last
     data = build_data(task, m, files, cards, account)
@@ -1442,6 +1443,7 @@ def hook_stop(inp):
     nchg = sum(1 for r in rows if r["changed"])
     use(bwd, "stop", task=task["id"], run=run, items=len(need), notest=len(nt), files=len(files), follow=task.get("run_n", 1) > 1,
         probes=len(rows), changed=nchg, beliefs=(bel or {}).get("checked", 0), broke=len((bel or {}).get("broken", [])))
+    tele_stop(bwd, task, files, rc, bel, data, last)
     proof = []
     if rows:
         proof.append("receipt: %d of %d probe%s changed output" % (nchg, len(rows), "" if len(rows) == 1 else "s"))
@@ -2177,14 +2179,37 @@ def cmd_on(args):
     backfill(root, bwd, m, 40)
     render_home(bwd, m, root)
     asks = [r["name"] for r in m.get("regions", []) if r.get("class") in ("migrate", "answer")]
+    v = _vers()
+    setup = ["python %s" % v["py"], "git %s" % (v["git"] or "MISSING"), "bw %s" % BW_VERSION]
+    bad = [] if sys.version_info >= (3, 8) else ["python 3.8 or newer needed"]
+    if not v["git"]:
+        bad.append("git not found on PATH")
     print("bw is on for %s" % root)
-    print("  map: %d regions, %s" % (len(m.get("regions", [])), how))
-    print("  probes are asked for when these change: %s" % (", ".join(asks) if asks else "no region yet"))
+    print("  setup     %s - %s" % (", ".join(setup), "; ".join(bad) if bad else "ok"))
+    print("  map       %d regions, %s%s" % (len(m.get("regions", [])), how, (" (costly: %s)" % ", ".join(asks)) if asks else ""))
+    print("            change one: /bw:map <region> costly   (or cheap, fix, critical)")
+    print("")
+    print("  what happens now")
+    print("  - Work as usual. When a task changes code, bw runs small probe commands on the code")
+    print("    before and after, and shows both outputs side by side.")
     if not load_probes(root, "HEAD"):
-        print("  no probes yet: the next task that changes code is asked for its first probes (or ask for a review)")
-    print("  change what counts as costly: /bw:map <region> costly  (or: cheap, fix, critical)")
-    print("  home: %s#catchup" % home_url(root, bwd))
-    print("  turn off: python3 %s off %s" % (os.path.abspath(__file__), root))
+        print("  - This repo has no probes yet, so your next code task asks the agent for its first")
+        print("    1-3 probes, once (about a minute).")
+    print("  - Try first, no code changes:  /bw:how <a question about this code>")
+    print("    e.g. /bw:how what happens when a request times out halfway?")
+    print("  - Results: %s#catchup  (or /bw:home)" % home_url(root, bwd))
+    print("  - Setup check any time: /bw:doctor")
+    conf = tele_conf()
+    print("")
+    if "on" not in conf:
+        print("  share anonymous usage counts with bw's author?  (off now)")
+        print("  - only counts, versions and bw's own error codes; never paths, code, prompts,")
+        print("    repo names or finding text. See exactly what: /bw:telemetry show")
+        print("  - turn on: /bw:telemetry on        turn off any time: /bw:telemetry off")
+    else:
+        print("  telemetry is %s (/bw:telemetry)" % ("on" if tele_on() else "off"))
+    print("")
+    print("  turn bw off here: /bw:off     everything bw keeps is in .git/bw/ and ~/.config/bw/")
 
 
 USER_CLASS = {"undo": "undo", "cheap": "undo", "repair": "repair", "fix": "repair", "migrate": "migrate", "costly": "migrate",
@@ -3437,7 +3462,589 @@ def render_plan(bwd, root, pid):
 
 
 
+# ---------- telemetry: opt-in, counts only, every field allowlisted ----------
+# bw keeps a few daily counts in its own folder (~/.config/bw, never in a repo) so `/bw:telemetry show` and `/bw:doctor`
+# can say what happened. Nothing leaves the machine unless the person runs `/bw:telemetry on`. Then, at most once a day,
+# the finished days are sent as three kinds of events (install / day / error). Every event passes tele_valid(): each field
+# has a type, every text value comes from a closed list written below, and an event with anything else is dropped whole.
+# There is no field that can hold a path, a file or region name, code, a prompt, probe output or a finding: that is the
+# privacy guarantee, not scrubbing. Error messages and tracebacks stay in the local errors.log under a short id.
+
+BW_VERSION = "0.14.0"
+TELE_HOST = os.environ.get("BW_TELEMETRY_HOST", "https://us.i.posthog.com")
+TELE_KEY = os.environ.get("BW_TELEMETRY_KEY", "")  # set when the telemetry project exists; empty = never send
+TELE_SEND_EVERY = 20 * 3600
+HOOK_TIMEOUT = {"prompt": 60, "post": 30, "stop": 300, "pre": 30, "allow": 10, "plan": 60, "postfail": 30}
+TELE_OS = ("macos", "linux", "wsl", "windows", "other")
+TELE_HOOKS = tuple(HOOK_TIMEOUT)
+TELE_CMDS = ("on", "off", "home", "stats", "map", "do", "plan", "how", "why", "recall", "receipt", "beliefs", "keep", "findings",
+             "brief", "hollow", "task", "agents-md", "doctor", "telemetry", "serve", "backfill", "render")
+TELE_COUNTERS = ("tasks", "reviews", "receipts", "probes_run", "changed", "same", "cant_tell", "flaky", "probe_cmd_missing",
+                 "probe_timeout", "probe_skipped", "probe_ask", "first_probe_ask", "probe_ask_answered", "no_probe_reply",
+                 "findings_shown", "findings_unshown", "beliefs_run", "beliefs_broke", "pages", "plan_opened", "plan_approved",
+                 "plan_changes", "brief_sent")
+TELE_DECISIONS = ("fix", "expected", "skip", "keep", "not_intended", "leave_open", "predicted", "other")
+TELE_FILES = ("0", "1-3", "4-10", "11+")
+TELE_RTIME = ("<10s", "<60s", "<180s", "180s+")
+TELE_CAUSES = ("git_unsafe_repo", "git_missing", "git_failed", "io_error", "state_corrupt", "subprocess_timeout", "server_port",
+               "hook_timeout", "python_old", "other")
+TELE_GITCMDS = ("rev-parse", "archive", "diff", "ls-files", "show", "log", "config", "write-tree", "read-tree", "add",
+                "update-ref", "cat-file", "status", "hash-object", "commit-tree", "for-each-ref", "other")
+TELE_STAGES = TELE_HOOKS + tuple("cmd-" + c for c in TELE_CMDS) + ("receipt", "beliefs", "repo_root", "send")
+_RX_VER = re.compile(r"^\d{1,4}(\.\d{1,4}){0,2}$")
+_RX_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_RX_REPO = re.compile(r"^r_[0-9a-f]{8}$")
+_RX_INSTALL = re.compile(r"^i_[0-9a-f]{16}$")
+_RX_ERRID = re.compile(r"^e[0-9a-f]{4}$")
+
+
+def _exc_names():
+    import builtins
+    return tuple(sorted(n for n in dir(builtins) if isinstance(getattr(builtins, n), type)
+                        and issubclass(getattr(builtins, n), BaseException))) + ("Other",)
+
+
+TELE_EXC = _exc_names()
+TELE_ERRNO = tuple(sorted(__import__("errno").errorcode.values())) + ("none",)
+
+
+def _v_int(x):
+    return isinstance(x, int) and not isinstance(x, bool) and 0 <= x <= 10 ** 7
+
+
+def _v_enum(vals):
+    return lambda x: isinstance(x, str) and x in vals
+
+
+def _v_rx(rx):
+    return lambda x: isinstance(x, str) and bool(rx.match(x))
+
+
+def _v_counts(keys):
+    return lambda x: isinstance(x, dict) and all(k in keys and _v_int(v) for k, v in x.items())
+
+
+def _v_fn(x):
+    g = globals().get(x)
+    return isinstance(x, str) and (x in ("nested", "module") or (callable(g) and getattr(g, "__module__", None) == __name__))
+
+
+TELE_SCHEMA = {
+    "install": {"v": _v_rx(_RX_VER), "cc": _v_rx(_RX_VER), "py": _v_rx(_RX_VER), "git": _v_rx(_RX_VER), "os": _v_enum(TELE_OS)},
+    "day": dict({k: _v_int for k in TELE_COUNTERS}, date=_v_rx(_RX_DATE), repo=_v_rx(_RX_REPO), v=_v_rx(_RX_VER),
+                decisions=_v_counts(TELE_DECISIONS), cmds=_v_counts(TELE_CMDS), hooks=_v_counts(TELE_HOOKS),
+                files=_v_counts(TELE_FILES), receipt_time=_v_counts(TELE_RTIME)),
+    "error": {"date": _v_rx(_RX_DATE), "repo": _v_rx(_RX_REPO), "v": _v_rx(_RX_VER), "stage": _v_enum(TELE_STAGES),
+              "fn": _v_fn, "line": _v_int, "type": _v_enum(TELE_EXC), "errno": _v_enum(TELE_ERRNO), "cause": _v_enum(TELE_CAUSES),
+              "gitcmd": _v_enum(TELE_GITCMDS), "count": _v_int, "err_ids": lambda x: isinstance(x, list) and len(x) <= 5
+              and all(_v_rx(_RX_ERRID)(i) for i in x)},
+}
+TELE_REQUIRED = {"install": ("v", "os"), "day": ("date", "repo", "v"), "error": ("date", "v", "stage", "cause", "count")}
+
+
+def tele_valid(ev):
+    """True only if every field of the event is in the schema and passes its check. Anything else: the event is dropped."""
+    if not isinstance(ev, dict) or ev.get("event") not in TELE_SCHEMA or not isinstance(ev.get("props"), dict):
+        return False
+    spec, props = TELE_SCHEMA[ev["event"]], ev["props"]
+    if set(ev) - {"event", "props"} or any(k not in props for k in TELE_REQUIRED[ev["event"]]):
+        return False
+    return all(k in spec and spec[k](v) for k, v in props.items())
+
+
+def bw_home():
+    d = os.environ.get("BW_HOME") or os.path.join(os.path.expanduser("~"), ".config", "bw")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+class _Lock:
+    """An exclusive lock on bw's own folder: hooks run in parallel and all add to the same day counts."""
+    def __enter__(self):
+        self.f = open(os.path.join(bw_home(), ".lock"), "a")
+        try:
+            import fcntl
+            fcntl.flock(self.f, fcntl.LOCK_EX)
+        except Exception:
+            pass
+        return self
+
+    def __exit__(self, *a):
+        self.f.close()
+
+
+def tele_conf():
+    return load(os.path.join(bw_home(), "telemetry.json"), {}) or {}
+
+
+def tele_blocked():
+    """Hard off switches, whatever the person chose: DO_NOT_TRACK, BW_TELEMETRY=0, CI."""
+    if os.environ.get("DO_NOT_TRACK", "") not in ("", "0") or os.environ.get("BW_TELEMETRY", "") == "0":
+        return "DO_NOT_TRACK or BW_TELEMETRY=0 is set"
+    if os.environ.get("CI"):
+        return "running in CI"
+    return None
+
+
+def tele_on():
+    return bool(tele_conf().get("on")) and not tele_blocked()
+
+
+def tele_repo_id(bwd):
+    """A random id for this repo, made the first time bw counts here. Not derived from the path or the remote."""
+    p = os.path.join(bwd, "tele_repo")
+    try:
+        rid = open(p).read().strip()
+        if _RX_REPO.match(rid):
+            return rid
+    except Exception:
+        pass
+    rid = "r_" + uuid.uuid4().hex[:8]
+    try:
+        with open(p, "w") as f:
+            f.write(rid)
+    except Exception:
+        pass
+    return rid
+
+
+def _today():
+    return time.strftime("%Y-%m-%d", time.gmtime())
+
+
+def _day_path():
+    return os.path.join(bw_home(), "days.json")
+
+
+def tele_count(bwd, counters=None, **groups):
+    """Add to today's counts for this repo, locally. groups: decisions/cmds/hooks/files/receipt_time -> {name: n}."""
+    try:
+        rid = tele_repo_id(bwd)
+        with _Lock():
+            days = load(_day_path(), {}) or {}
+            row = days.setdefault(_today(), {}).setdefault(rid, {})
+            for k, n in (counters or {}).items():
+                if k in TELE_COUNTERS and n:
+                    row[k] = row.get(k, 0) + int(n)
+            for g, vals in groups.items():
+                for k, n in (vals or {}).items():
+                    if n:
+                        row.setdefault(g, {})[k] = row.get(g, {}).get(k, 0) + int(n)
+            save(_day_path(), days)
+    except Exception:
+        pass
+
+
+def _cause(e):
+    import errno as _errno
+    msg = str(e)
+    gitcmd = None
+    if isinstance(e, RuntimeError) and msg.startswith("git "):
+        sub = msg[4:].split(" ", 1)[0].rstrip(":")
+        gitcmd = sub if sub in TELE_GITCMDS else "other"
+        return ("git_unsafe_repo" if "dubious ownership" in msg else "git_failed"), gitcmd
+    if "dubious ownership" in msg:
+        return "git_unsafe_repo", None
+    if isinstance(e, FileNotFoundError) and getattr(e, "filename", None) == "git":
+        return "git_missing", None
+    if isinstance(e, json.JSONDecodeError):
+        return "state_corrupt", None
+    if isinstance(e, subprocess.TimeoutExpired):
+        return "subprocess_timeout", None
+    if isinstance(e, OSError) and e.errno == _errno.EADDRINUSE:
+        return "server_port", None
+    if isinstance(e, OSError) and e.errno in (_errno.EIO, _errno.ENOSPC, _errno.EACCES, _errno.EROFS, _errno.EPERM, _errno.EMFILE, _errno.EDQUOT):
+        return "io_error", None
+    return "other", None
+
+
+def _exc_type(e):
+    import builtins
+    for c in type(e).__mro__:
+        if getattr(builtins, c.__name__, None) is c:
+            return c.__name__
+    return "Other"
+
+
+def _redact(text):
+    """For the local log shown by /bw:doctor <id>: home folder and repo paths replaced, so pasting it is safer."""
+    home = os.path.expanduser("~")
+    text = re.sub(r"(/[\w.@+-]+){2,}", lambda m: "<HOME>" + m.group(0)[len(home):] if m.group(0).startswith(home) else "<PATH>", text)
+    return text
+
+
+def tele_error(stage, e, bwd=None, tb=None):
+    """Record a bw failure: the full message and traceback in the local errors.log under a short id; a fingerprint
+    (bw function, bw line, error type, cause code) in today's counts. Returns the id."""
+    import traceback
+    eid = "e" + uuid.uuid4().hex[:4]
+    try:
+        tb = tb if tb is not None else e.__traceback__
+        frames = [f for f in traceback.extract_tb(tb) if os.path.abspath(f.filename) == os.path.abspath(__file__)] if tb else []
+        fn, line = (frames[-1].name, frames[-1].lineno) if frames else ("module", 0)
+        if fn not in ("module", "nested") and not _v_fn(fn):
+            fn = "nested" if fn != "<module>" else "module"
+        cause, gitcmd = _cause(e)
+        fields = {"v": BW_VERSION, "stage": stage if stage in TELE_STAGES else "send", "fn": fn, "line": line, "type": _exc_type(e), "cause": cause,
+                  "errno": __import__("errno").errorcode.get(getattr(e, "errno", None) or -1, "none")}
+        if gitcmd:
+            fields["gitcmd"] = gitcmd
+        with open(os.path.join(bw_home(), "errors.log"), "a") as f:
+            f.write("%s %s %s %s:%d %s %s\n%s\n" % (eid, time.strftime("%Y-%m-%d %H:%M:%S"), stage, fn, line, cause, repr(e)[:500],
+                    "".join(traceback.format_tb(tb))[-3000:] if tb else ""))
+        _tele_err_count(bwd, fields, eid)
+    except Exception:
+        pass
+    return eid
+
+
+def _tele_err_count(bwd, fields, eid):
+    rid = tele_repo_id(bwd) if bwd else None
+    fp = ":".join(str(fields.get(k, "")) for k in ("stage", "fn", "line", "type", "cause"))
+    with _Lock():
+        days = load(_day_path(), {}) or {}
+        e = days.setdefault(_today(), {}).setdefault("_errors", {}).setdefault(fp, dict(fields, count=0, err_ids=[]))
+        if rid:
+            e["repo"] = rid
+        e["count"] += 1
+        if len(e["err_ids"]) < 5:
+            e["err_ids"].append(eid)
+        save(_day_path(), days)
+
+
+# Hook marks: Claude Code kills a hook that runs past its timeout, and bw never hears about it. Each hook leaves a mark
+# when it starts and removes it when it ends; a mark left behind by a process that no longer runs is a timeout.
+def _marks():
+    d = os.path.join(bw_home(), "running")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def hook_mark_start(hook, bwd):
+    p = os.path.join(_marks(), "%s.%d.%d.%s" % (hook, os.getpid(), int(time.time()), tele_repo_id(bwd)))
+    try:
+        open(p, "w").close()
+    except Exception:
+        return None
+    for name in os.listdir(_marks()):
+        try:
+            h, pid, t, rid = name.split(".")
+            if int(pid) == os.getpid() or time.time() - int(t) < HOOK_TIMEOUT.get(h, 60) + 15:
+                continue
+            try:
+                os.kill(int(pid), 0)
+                continue  # still running
+            except ProcessLookupError:
+                pass
+            except Exception:
+                continue
+            os.remove(os.path.join(_marks(), name))
+            eid = "e" + uuid.uuid4().hex[:4]
+            with open(os.path.join(bw_home(), "errors.log"), "a") as f:
+                f.write("%s %s %s module:0 hook_timeout hook did not finish (killed at its %ds timeout?)\n" % (eid, time.strftime("%Y-%m-%d %H:%M:%S"), h, HOOK_TIMEOUT.get(h, 60)))
+            fields = {"v": BW_VERSION, "stage": h if h in TELE_HOOKS else "send", "fn": "module", "line": 0, "type": "Other", "cause": "hook_timeout", "errno": "none"}
+            if _RX_REPO.match(rid):
+                fields["repo"] = rid
+            _tele_err_count(None, fields, eid)
+        except Exception:
+            continue
+    return p
+
+
+def hook_mark_end(p):
+    try:
+        if p:
+            os.remove(p)
+    except Exception:
+        pass
+
+
+def _bucket(n, edges, names):
+    for e, name in zip(edges, names):
+        if n <= e:
+            return name
+    return names[-1]
+
+
+def tele_stop(bwd, task, files, rc, bel, data, last=""):
+    """Counts from one finished task: what the receipt showed and whether bw's probe request was answered."""
+    rows = [r for r in (rc or {}).get("rows", [])]
+    c = {"tasks": 1, "receipts": 1 if rows else 0, "probes_run": sum(1 for r in rows if "after" in r),
+         "probe_skipped": sum(1 for r in rows if r.get("skipped"))}
+    for r in rows:
+        v = r.get("verdict")
+        if v in ("changed", "same", "cant_tell", "flaky"):
+            c[v] = c.get(v, 0) + 1
+        why = r.get("why") or ""
+        if "not found" in why:
+            c["probe_cmd_missing"] = c.get("probe_cmd_missing", 0) + 1
+        elif "timed out" in why:
+            c["probe_timeout"] = c.get("probe_timeout", 0) + 1
+    if task.get("probe_ask"):
+        c["probe_ask"] = 1
+        c["probe_ask_answered"] = 1 if any(r.get("changed") for r in rows) else 0
+        c["no_probe_reply"] = 1 if data.get("noprobe") and no_probe_reason(last or "") else 0
+    if data.get("seed"):
+        c["first_probe_ask"] = 1
+    if bel:
+        c["beliefs_run"] = bel.get("checked", 0)
+        c["beliefs_broke"] = len(bel.get("broken", []))
+    groups = {"files": {_bucket(len(files), (0, 3, 10), TELE_FILES): 1}}
+    if rc and rows:
+        groups["receipt_time"] = {_bucket(rc.get("secs", 0), (10, 60, 180), TELE_RTIME): 1}
+    tele_count(bwd, c, **groups)
+
+
+DECISION_TELE = (("fix", "fix"), ("expected", "expected"), ("skip", "skip"), ("kept", "keep"), ("keep", "keep"),
+                 ("looks fixed", "keep"), ("not intended", "not_intended"), ("open", "leave_open"))
+
+
+def tele_use(bwd, ev, kw):
+    """The local use events that also become day counts (names and ids in kw are never copied)."""
+    if ev == "review":
+        tele_count(bwd, {"tasks": 1, "reviews": 1, "findings_shown": kw.get("shown", 0), "findings_unshown": kw.get("unshown", 0)})
+    elif ev == "decision":
+        d = str(kw.get("decision") if not isinstance(kw.get("decision"), dict) else kw["decision"].get("label", "")).lower()
+        name = next((t for k, t in DECISION_TELE if k in d), "other")
+        tele_count(bwd, decisions={name: 1})
+    elif ev == "predicted":
+        tele_count(bwd, decisions={"predicted": 1})
+    elif ev == "opened":
+        tele_count(bwd, {"pages": 1})
+    elif ev == "plan-opened":
+        tele_count(bwd, {"plan_opened": 1})
+    elif ev == "plan-pass":
+        tele_count(bwd, {"plan_approved": 1})
+    elif ev == "plan-rev":
+        tele_count(bwd, {"plan_changes": 1})
+
+
+def _vers():
+    def v(cmd, rx):
+        try:
+            m = re.search(rx, subprocess.run(cmd, capture_output=True, text=True, timeout=5).stdout)
+            return m.group(1) if m else None
+        except Exception:
+            return None
+    osf = "macos" if sys.platform == "darwin" else "windows" if os.name == "nt" else "linux" if sys.platform.startswith("linux") else "other"
+    if osf == "linux":
+        try:
+            if "microsoft" in open("/proc/version").read().lower():
+                osf = "wsl"
+        except Exception:
+            pass
+    return {"v": BW_VERSION, "py": "%d.%d" % sys.version_info[:2], "git": v(["git", "--version"], r"(\d+\.\d+)"),
+            "cc": v(["claude", "--version"], r"(\d+\.\d+\.\d+)"), "os": osf}
+
+
+def tele_pending():
+    """The events the next send would carry: every finished day (not today), plus an install event on a new version."""
+    days = load(_day_path(), {}) or {}
+    conf = tele_conf()
+    evs = []
+    if conf.get("sent_version") != BW_VERSION:
+        evs.append({"event": "install", "props": {k: v for k, v in _vers().items() if v}})
+    for date in sorted(days):
+        if date >= _today():
+            continue
+        for rid, row in days[date].items():
+            if rid == "_errors":
+                for e in row.values():
+                    evs.append({"event": "error", "props": dict({"v": BW_VERSION}, **dict(e, date=date))})
+            else:
+                evs.append({"event": "day", "props": dict(row, date=date, repo=rid, v=BW_VERSION)})
+    return evs
+
+
+def tele_send(force=False):
+    """Send finished days if the person turned telemetry on. Every event is checked against the schema first; an event
+    that fails is dropped and never retried. On success the days leave days.json and are kept in sent.jsonl for 30 days."""
+    if not tele_on() or not TELE_KEY:
+        return "off" if not tele_on() else "no telemetry project configured"
+    conf = tele_conf()
+    if not force and time.time() - conf.get("last_send", 0) < TELE_SEND_EVERY:
+        return "sent less than a day ago"
+    evs = [e for e in tele_pending() if tele_valid(e)]
+    if not evs:
+        return "nothing to send"
+    iid = conf.get("install_id")
+    batch = [{"event": "bw_" + e["event"], "distinct_id": iid,
+              "timestamp": (e["props"].get("date") or _today()) + "T12:00:00Z",
+              "properties": dict(e["props"], **{"$process_person_profile": False, "$geoip_disable": True, "$lib": "bw"})} for e in evs]
+    import urllib.request
+    req = urllib.request.Request(TELE_HOST.rstrip("/") + "/batch/", data=json.dumps({"api_key": TELE_KEY, "batch": batch}).encode(),
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            ok = 200 <= r.status < 300
+    except Exception as e:
+        tele_error("send", e)
+        return "send failed (kept for next time)"
+    if not ok:
+        return "send refused (kept for next time)"
+    with _Lock():
+        days = load(_day_path(), {}) or {}
+        for d in [d for d in days if d < _today()]:
+            days.pop(d)
+        save(_day_path(), days)
+        conf = tele_conf()
+        conf.update(last_send=time.time(), sent_version=BW_VERSION)
+        save(os.path.join(bw_home(), "telemetry.json"), conf)
+    sp = os.path.join(bw_home(), "sent.jsonl")
+    keep = []
+    try:
+        keep = [l for l in open(sp) if json.loads(l).get("at", 0) > time.time() - 30 * 86400]
+    except Exception:
+        pass
+    with open(sp, "w") as f:
+        f.writelines(keep)
+        for e in evs:
+            f.write(json.dumps(dict(e, at=round(time.time()))) + "\n")
+    return "sent %d event%s" % (len(evs), "" if len(evs) == 1 else "s")
+
+
+def tele_maybe_send():
+    """From the Stop hook: start a detached send when one is due. Never waits for the network."""
+    try:
+        if tele_on() and TELE_KEY and time.time() - tele_conf().get("last_send", 0) >= TELE_SEND_EVERY \
+                and any(d < _today() for d in (load(_day_path(), {}) or {})):
+            subprocess.Popen([sys.executable, os.path.abspath(__file__), "telemetry", "send"], start_new_session=True,
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
+TELE_SAYS = """bw telemetry is {state}.
+  When on, bw sends once a day: counts of tasks, receipts, probe results, decisions, pages and bw commands; bw, Claude Code,
+  Python and git versions and your OS family; and bw's own error codes (bw function, bw line, error type). Never paths,
+  file or folder names, repo names, code, probe output, prompts, finding text, names or emails. Ids are random.
+  See exactly what would be sent: /bw:telemetry show   Already sent: /bw:telemetry log   Local folder: {home}"""
+
+
+def cmd_telemetry(args):
+    """bwcap.py telemetry [on|off|show|log|send]"""
+    sub = args[0] if args else "status"
+    path = os.path.join(bw_home(), "telemetry.json")
+    if sub in ("on", "off"):
+        with _Lock():
+            conf = tele_conf()
+            conf["on"] = sub == "on"
+            conf["asked"] = time.time()
+            if sub == "on" and not conf.get("install_id"):
+                conf["install_id"] = "i_" + uuid.uuid4().hex[:16]
+            save(path, conf)
+        blocked = tele_blocked()
+        print("bw telemetry is %s.%s" % (sub, (" (but nothing is sent here: %s)" % blocked) if sub == "on" and blocked else ""))
+        if sub == "on":
+            print("Thank you. See what is sent with /bw:telemetry show; turn off any time with /bw:telemetry off.")
+        return
+    if sub == "show":
+        evs = tele_pending()
+        good = [e for e in evs if tele_valid(e)]
+        print("bw telemetry is %s. Next send would carry %d event%s%s:" % ("on" if tele_on() else "off", len(good), "" if len(good) == 1 else "s",
+              (" (%d more dropped by the allowlist)" % (len(evs) - len(good))) if len(evs) != len(good) else ""))
+        for e in good:
+            print(json.dumps(e, sort_keys=True))
+        today = (load(_day_path(), {}) or {}).get(_today())
+        if today:
+            print("Today, counted so far (sent after today ends):")
+            print(json.dumps(today, sort_keys=True))
+        return
+    if sub == "log":
+        try:
+            print(open(os.path.join(bw_home(), "sent.jsonl")).read().strip() or "Nothing sent yet.")
+        except Exception:
+            print("Nothing sent yet.")
+        return
+    if sub == "send":
+        print(tele_send(force="--force" in args))
+        return
+    print(TELE_SAYS.format(state="on" if tele_on() else ("off (%s)" % tele_blocked() if tele_conf().get("on") else "off"), home=bw_home()))
+
+
+def cmd_doctor(args):
+    """Read-only setup check, or one local error by id: bwcap.py doctor [e1a2]"""
+    if args and _RX_ERRID.match(args[0]):
+        try:
+            text = open(os.path.join(bw_home(), "errors.log")).read()
+        except Exception:
+            text = ""
+        parts = re.split(r"(?m)^(?=e[0-9a-f]{4} \d{4}-)", text)
+        hit = [p for p in parts if p.startswith(args[0] + " ")]
+        if not hit:
+            print("No bw error with id %s on this machine." % args[0])
+            return
+        print("bw error %s, with your home folder and other paths replaced. Read it before sharing:\n" % args[0])
+        print(_redact(hit[-1]).strip())
+        return
+    ok = lambda b: "ok  " if b else "FIX "
+    py = sys.version_info >= (3, 8)
+    print("%s python %d.%d%s" % (ok(py), sys.version_info[0], sys.version_info[1], "" if py else " (bw needs 3.8 or newer)"))
+    gv = _vers()
+    print("%s git %s" % (ok(gv["git"]), gv["git"] or "not found on PATH"))
+    print("ok   bw %s, %s, Claude Code %s" % (BW_VERSION, gv["os"], gv["cc"] or "not found on PATH"))
+    root = repo_root(args[0] if args else os.getcwd())
+    if not root:
+        print("--   this folder is not in a git repository")
+    else:
+        on = enabled(root)
+        print("%s bw is %s in this repo%s" % (ok(on), "on" if on else "off", "" if on else " (turn on: /bw:on)"))
+        if on:
+            bwd = bw_dir(root)
+            np = len(load_probes(root, "HEAD"))
+            print("ok   %d probe%s committed at HEAD" % (np, "" if np == 1 else "s"))
+            days = load(_day_path(), {}) or {}
+            rid = tele_repo_id(bwd)
+            hooks = {}
+            for d in sorted(days)[-7:]:
+                for h, n in (days[d].get(rid, {}).get("hooks") or {}).items():
+                    hooks[h] = hooks.get(h, 0) + n
+            print("%s hooks seen in the last 7 days: %s" % (ok(hooks.get("prompt")), ", ".join("%s %d" % kv for kv in sorted(hooks.items()))
+                  or "none (restart Claude Code in this repo after installing)"))
+    try:
+        lines = [l for l in open(os.path.join(bw_home(), "errors.log")) if re.match(r"^e[0-9a-f]{4} \d{4}-", l)]
+    except Exception:
+        lines = []
+    if lines:
+        print("--   last bw errors (see one: /bw:doctor <id>):")
+        for l in lines[-3:]:
+            f = l.split(" ")
+            print("       %s %s %s %s %s" % (f[0], f[1], f[3], f[4], f[5] if len(f) > 5 else ""))
+    else:
+        print("ok   no bw errors recorded on this machine")
+    print("--   telemetry %s (/bw:telemetry)" % ("on" if tele_on() else "off"))
+
+
 def main():
+    name = sys.argv[1] if len(sys.argv) >= 2 else ""
+    if name == "telemetry":
+        return cmd_telemetry(sys.argv[2:])
+    if name == "doctor":
+        try:
+            r = repo_root(os.getcwd())
+            if r and enabled(r):
+                tele_count(bw_dir(r), cmds={"doctor": 1})
+        except Exception:
+            pass
+        return cmd_doctor(sys.argv[2:])
+    if name == "hook" or name not in TELE_CMDS:
+        return _dispatch()
+    bwd = None
+    try:
+        r = repo_root(os.getcwd())
+        if r and enabled(r) and name != "serve":
+            bwd = bw_dir(r)
+            tele_count(bwd, cmds={name: 1})
+    except Exception:
+        pass
+    try:
+        return _dispatch()
+    except Exception as e:
+        tele_error("cmd-" + name, e, bwd)
+        raise
+
+
+def _dispatch():
     cli = {"receipt": cmd_receipt, "beliefs": cmd_beliefs, "keep": cmd_keep, "agents-md": cmd_agents_md, "task": cmd_task,
            "how": cmd_how, "why": cmd_why, "recall": cmd_recall, "brief": cmd_brief, "findings": cmd_findings, "hollow": cmd_hollow}
     if len(sys.argv) >= 2 and sys.argv[1] in cli:
@@ -3473,15 +4080,25 @@ def main():
                         f.write(json.dumps({"event": sys.argv[2], "keys": sorted(inp.keys())}) + "\n")
             except Exception:
                 pass
+        hb, mark = None, None
+        try:  # count the hook and leave a mark that a timeout would leave behind; only in repos where bw is on
+            r0 = hook_root(dict(inp))
+            if r0 and enabled(r0) and sys.argv[2] in TELE_HOOKS:
+                hb = bw_dir(r0)
+                mark = hook_mark_start(sys.argv[2], hb)
+                tele_count(hb, hooks={sys.argv[2]: 1})
+        except Exception:
+            pass
         try:
             out = {"prompt": hook_prompt, "pre": hook_pre, "post": hook_post, "stop": hook_stop_all,
                    "plan": hook_plan, "allow": hook_allow, "postfail": hook_postfail}[sys.argv[2]](inp)
             if out:
                 print(json.dumps(out))
         except Exception as e:  # a hook must never break the agent's session
-            log = os.path.join(os.path.expanduser("~"), ".bw-capture-errors.log")
-            with open(log, "a") as f:
-                f.write("%s %s %r\n" % (time.ctime(), sys.argv[2], e))
+            tele_error(sys.argv[2], e, hb)
+        hook_mark_end(mark)
+        if sys.argv[2] == "stop" and hb:
+            tele_maybe_send()
         sys.exit(0)
     if len(sys.argv) >= 2 and sys.argv[1] == "home":
         # open bw home for the repo in the current directory

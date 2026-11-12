@@ -30,31 +30,40 @@ It works in any git repo and any language, with Claude Code (plugin hooks) or an
 
 The watch room keeps the map, timeline, test-run marks, plan pages and steering from earlier versions.
 
-## Install (one command)
+## Install
 
-Unzip, then from this folder:
+    claude plugin install bw --marketplace alincatalin/bwatch
 
-    bash install.sh /path/to/your/repo
+Restart Claude Code in any git repo and type `/bw:on`. It drafts a map from your folders, checks your setup and says what
+happens on the first task. Needs python3 (3.8+) and git; macOS, Linux or WSL. Update with `claude plugin update bw@bw`,
+then restart. New here? Read [FRIENDS.md](FRIENDS.md).
 
-That installs the plugin, turns bw on for that repo and drafts a map from its folders.
-Restart Claude Code in the repo. Needs claude, python3 and git. Keep this folder: the plugin is installed from it.
-
-If you already have a hand-made map, pass it instead of a draft:
-
-    bash install.sh /path/to/your/repo your.map.json
+Working on bw itself: `bash install.sh /path/to/repo` installs from this folder (keep the folder; Claude Code runs the
+plugin from it).
 
 ## Use
 
 Work as usual. When the agent finishes, the watch room opens (macOS) and its link appears in the chat.
-If the task touched a region marked `migrate` or `answer` and no probe shows a change, the agent first writes probes (about a minute).
+If the task touched a region marked costly or critical and no probe shows a change, the agent first writes probes (about a minute).
 
-- Fix the map: edit `.git/bw/map.json` in the repo (names, and class undo / repair / migrate / answer).
-- Watch room any time: open `.git/bw/home.html`. Each task's own debrief is linked from it.
-- What you've seen and your decisions are kept in your browser for now, not in the repo.
-- Turn off: `python3 plugin/scripts/bwcap.py off /path/to/repo`. In repos where bw is not on, it does nothing.
-- Uninstall: `claude plugin uninstall bw@bw-local`.
+- Map: `/bw:map` shows it; `/bw:map <region> costly` (or cheap, fix, critical) changes one.
+- Watch room any time: `/bw:home`. Setup check: `/bw:doctor`.
+- Turn off: `/bw:off`. In repos where bw is not on, it does nothing.
+- Uninstall: `claude plugin uninstall bw@bw`.
 
-Nothing is committed and nothing leaves your machine. State lives in `.git/bw/`.
+Nothing is committed. Repo state lives in `.git/bw/`; bw's own counts, error log and telemetry choice in `~/.config/bw/`
+(`BW_HOME` moves it). Nothing leaves your machine unless you turn telemetry on.
+
+## Telemetry (opt-in)
+
+`/bw:telemetry on` sends, at most once a day, counts from finished days: tasks, receipts, probe results, decisions, pages,
+bw commands and hook runs; bw, Claude Code, Python and git versions and the OS family; and bw's own error fingerprints
+(hook, bw function, bw line, Python error type, a cause code). Each event passes an allowlist (`tele_valid` in bwcap.py):
+every field has a type, every text value comes from a closed list, and an event with anything else is dropped whole. No field
+can hold a path, file, folder or repo name, code, probe output, a prompt or finding text. Install and repo ids are random.
+`/bw:telemetry show` prints the next send exactly; `/bw:telemetry log` what was sent. `DO_NOT_TRACK=1`, `BW_TELEMETRY=0`
+and CI always turn it off. Error messages stay in `~/.config/bw/errors.log` under a short id; `/bw:doctor <id>` prints one
+with paths replaced, for you to share if you want to.
 
 ## Other agents, git hooks, CI
 
@@ -82,6 +91,22 @@ different output on each run is marked flaky and never counted as a change. Limi
 ## Cloud threads
 
 The watch room runs on 127.0.0.1, which a cloud session can't share. When bw runs on the repo named by `BW_REPO` it also writes a static snapshot to `<repo>/watch.html` after every task (or to the file `BW_PAGE` names). Decide findings by writing `fix finding <name>`, `expected finding <name>` or `skip finding <name>` in chat: bw records it from the prompt, even inside the hosted session's wrapper text, and task titles use the person's words, not that wrapper.
+
+## 0.14.0
+
+Ready to give to a few people outside.
+
+- Install from GitHub in one command: `claude plugin install bw --marketplace alincatalin/bwatch`. The marketplace is now
+  called `bw` (was `bw-local`); `install.sh` removes the old one.
+- `/bw:on` checks python and git, says what happens on the first task, suggests `/bw:how` as a first try, and asks once
+  about telemetry. It shows bw's output as printed instead of a summary.
+- `/bw:doctor`: python, git, Claude Code and bw versions, whether bw is on, probes at HEAD, hooks seen in the last 7 days,
+  the last bw errors. `/bw:doctor <id>` prints one error with paths replaced.
+- Opt-in telemetry (`/bw:telemetry`), off by default. Daily counts and error fingerprints, allowlisted field by field.
+- Errors: hook crashes, receipt and belief failures and git refusals go to `~/.config/bw/errors.log` with an id, a cause
+  code and the bw line, instead of `~/.bw-capture-errors.log`. A hook that Claude Code killed at its timeout is noticed
+  on the next hook run (each hook leaves a mark while it runs).
+- New dogfood probe `telemetry-allowlist`: which events the gate lets through.
 
 ## 0.13.1
 
