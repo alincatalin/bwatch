@@ -3472,7 +3472,7 @@ def render_plan(bwd, root, pid):
 
 BW_VERSION = "0.14.0"
 TELE_HOST = os.environ.get("BW_TELEMETRY_HOST", "https://us.i.posthog.com")
-TELE_KEY = os.environ.get("BW_TELEMETRY_KEY", "")  # set when the telemetry project exists; empty = never send
+TELE_KEY = os.environ.get("BW_TELEMETRY_KEY", "phc_sQTYuZwYQkN3HKFiVo2d2XZ3VJB3YUjCEzYJQWPxZB7t")  # public project key (write-only); empty = never send
 TELE_SEND_EVERY = 20 * 3600
 HOOK_TIMEOUT = {"prompt": 60, "post": 30, "stop": 300, "pre": 30, "allow": 10, "plan": 60, "postfail": 30}
 TELE_OS = ("macos", "linux", "wsl", "windows", "other")
