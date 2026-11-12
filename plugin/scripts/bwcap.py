@@ -350,7 +350,9 @@ def hook_prompt(inp):
                          "run_title": prev.get("run_title") or task_title(prev), "run_n": prev.get("run_n", 1) + 1,
                          "edits": list(prev.get("edits", [])), "commands": list(prev.get("commands", [])),
                          "tests_run": list(prev.get("tests_run", []))})
-    if prompt.startswith("/bw:how"):
+    if prompt.startswith("/bw:onboard"):
+        task["mode"] = "onboard"  # read-only like /bw:how: the agent writes probes and .bw/project.json, nothing else
+    elif prompt.startswith("/bw:how"):
         task["mode"] = "how"  # read-only on purpose: edits outside .bw/ are refused, findings come back as probes
     elif REVIEW_PROMPT.search(task_title(task)) and not prompt.startswith("/bw:") and not inp.get("_via_env"):
         task["review"] = 1  # only matters if the task ends with no code changed
@@ -384,7 +386,7 @@ def hook_pre(inp):
     if not task or not p:
         return None
     rel = os.path.relpath(p, root) if os.path.isabs(p) else p
-    if task.get("mode") == "how" and not rel.replace(os.sep, "/").startswith(".bw/"):
+    if task.get("mode") in ("how", "onboard") and not rel.replace(os.sep, "/").startswith(".bw/"):
         return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason":
                 "bw: /bw:how is read-only. Do not change code in this task. Write only probes under .bw/probes/ that show what "
                 "the code does now, then answer. The engineer decides on the findings first."}}
@@ -838,7 +840,8 @@ def watch_data(bwd, m, root):
             items.append({"id": "%s-f-%s" % (tid, r["probe"]), "kind": "finding", "task": tid, "beh": None, "pid": r["probe"],
                           "cls": min((cls_of.get(x, "repair") for x in (region_of(m, c) for c in r.get("covers", [])) if x), key=_cls_rank, default="repair"),
                           "title": html.escape(r["finding"]), "regions": regs_r, "files": r.get("covers") or [], "cmd": r.get("cmd", ""),
-                          "before": "", "after": r["after"], "q": r["scenario"], "entry": r.get("entry", ""), "pin": (data or {}).get("end")})
+                          "before": "", "after": r["after"], "q": r["scenario"], "entry": r.get("entry", ""), "pin": (data or {}).get("end"),
+                          "seed": 1 if (data or {}).get("onboard") else 0})
         other = [r for r in (data or {}).get("findings") or [] if r.get("verdict") != "shown"]
         if (data or {}).get("unshown") or other:
             items.append({"id": "%s-us" % tid, "kind": "unshown", "task": tid, "beh": None, "cls": "repair",
@@ -1347,6 +1350,22 @@ def hook_stop(inp):
         task["end"] = snapshot(root, task["id"], "end")
         save(tp, task)
     files = changed_files(root, task["start"], task["end"])
+    if task.get("mode") == "onboard":
+        sess = load(session_file(bwd, sid), {})
+        sess.pop("open", None)
+        sess["last"] = {"tid": task["id"], "ended": time.time(), "run": task["id"]}
+        save(session_file(bwd, sid), sess)
+        task["ended"] = time.time()
+        save(tp, task)
+        res = load(os.path.join(onboard_dir(bwd), "result.json"), None)
+        if not res or res.get("at", 0) < task["started"]:
+            res = onboard_verify(root, bwd)
+        url = home_url(root, bwd)
+        page = url.replace("home.html", "onboard.html") if url.startswith("http") else "file://" + os.path.join(bwd, "onboard.html")
+        if os.environ.get("BW_OPEN", "1") == "1":
+            open_page(page)
+        return {"systemMessage": "bw onboarding: %d probe%s run and stay stable, %d not used. See what bw knows and decide: %s" % (
+            res["ok"], "" if res["ok"] == 1 else "s", res["failed"], page)}
     acting = load(os.path.join(bwd, "acting.json"), None)
     first = (task.get("prompts") or [""])[0].strip()
     if acting and first.startswith("/bw:do") and acting.get("at", 0) >= task["started"] - 60 and not task.get("acts"):
@@ -1541,7 +1560,7 @@ def load_probes(root, commit):
              "covers": [c for c in spec.get("covers", []) if isinstance(c, str)][:20] if isinstance(spec.get("covers"), list) else []}
         # Optional fields: a review finding this probe shows, its role ("safety" = the fact the change is safe because of),
         # and the way in a user takes (a screen, a CLI flag, an API route). They change how bw groups the output, never the run.
-        for k in ("finding", "role", "entry"):
+        for k in ("finding", "role", "entry", "area", "kind", "quote", "source"):
             if isinstance(spec.get(k), str) and spec[k].strip():
                 p[k] = spec[k].strip()[:300]
         if isinstance(spec.get("functions"), list):  # optional: the functions the probe drives, for the hollow check
@@ -2195,18 +2214,15 @@ def cmd_on(args):
         bad.append("git not found on PATH")
     print("bw is on for %s" % root)
     print("  setup     %s - %s" % (", ".join(setup), "; ".join(bad) if bad else "ok"))
-    print("  map       %d regions, %s%s" % (len(m.get("regions", [])), how, (" (costly: %s)" % ", ".join(asks)) if asks else ""))
-    print("            see them: /bw:map   change one: /bw:map <number or name> costly  (or cheap, normal, critical)")
     print("")
-    print("  what happens now")
-    print("  - Work as usual. When a task changes code, bw runs small probe commands on the code")
-    print("    before and after, and shows both outputs side by side.")
-    if not load_probes(root, "HEAD"):
-        print("  - This repo has no probes yet, so your next code task asks the agent for its first")
-        print("    1-3 probes, once (about a minute).")
-    print("  - Try first, no code changes:  /bw:how <a question about this code>")
-    print("    e.g. /bw:how what happens when a request times out halfway?")
-    print("  - Results: %s#catchup  (or /bw:home)" % home_url(root, bwd))
+    print("  next: /bw:onboard  (10-15 min, changes no code)")
+    print("  - bw scans the repo's structure, history, tests and docs, then the agent writes")
+    print("    probes for the most important behaviors and bw checks each one runs.")
+    print("  - You then mark each one Keep / Wrong / Skip. What you keep, bw re-checks after")
+    print("    every agent task and tells you if it changes.")
+    print("")
+    print("  after that, work as usual: each task that changes code ends with a receipt")
+    print("  (probe outputs before and after). Results: %s#catchup  (or /bw:home)" % home_url(root, bwd))
     print("  - Setup check any time: /bw:doctor")
     conf = tele_conf()
     print("")
@@ -2906,26 +2922,16 @@ def aimed_lines(texts, probe_text, only=None):
     return out
 
 
-def cmd_hollow(args):
-    """bwcap.py hollow <probe-id> [--n 6]: plant small breaks (== to !=, < to <=, true to false, and to or) one at a time in
-    the code the probe covers, on a throwaway copy, and count how many change the probe's output. None = the probe may be
-    hollow: it would print the same if that code broke. A warning only: a probe can be right and still miss a planted break."""
-    root = repo_root(os.getcwd())
-    if not root or not args:
-        print("usage: bwcap.py hollow <probe-id> [--n 6]"); return 2
-    bwd = bw_dir(root)
-    n = int(args[args.index("--n") + 1]) if "--n" in args else 6
-    now = snapshot(root, "cli", "now")
-    p = {x["id"]: x for x in load_probes(root, now)}.get(probe_id(args[0]))
-    if not p or p.get("bad"):
-        print("bw: no probe %r." % args[0]); return 2
+def hollow_run(root, bwd, now, p, n=6):
+    """Plant up to n small breaks in the code probe p covers (on throwaway copies of commit now); report which ones the
+    probe's output caught. {"covers", "tried": [(file, line, src, hit)], "caught": [(file, line)], "aim"} or {"error"}."""
     covers = [c for c in p.get("covers") or [] if show(root, now, c) is not None]
     if not covers:
-        print("bw: probe %s names no file that exists in \"covers\", so bw cannot plant breaks." % p["id"]); return 2
+        return {"error": "probe %s names no file that exists in \"covers\", so bw cannot plant breaks." % p["id"]}
     tree, base = code_copy(root, bwd, now)
     ref = run_probe(root, base, p)
     if ref["exit"] in CANT_TELL_EXIT:
-        print("bw: the probe does not run (%s)." % cant_tell_why(ref)); return 1
+        return {"error": "the probe does not run (%s)." % cant_tell_why(ref)}
     texts = {c: show(root, now, c) or "" for c in covers}
     aim = aimed_lines(texts, p["cmd"] + "\n" + "\n".join(p.get("files", {}).values()), p.get("functions"))
     cands = []
@@ -2959,6 +2965,26 @@ def cmd_hollow(args):
                 caught.append((c, i + 1))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+    return {"covers": covers, "tried": tried, "caught": caught, "aim": aim}
+
+
+def cmd_hollow(args):
+    """bwcap.py hollow <probe-id> [--n 6]: plant small breaks (== to !=, < to <=, true to false, and to or) one at a time in
+    the code the probe covers, on a throwaway copy, and count how many change the probe's output. None = the probe may be
+    hollow: it would print the same if that code broke. A warning only: a probe can be right and still miss a planted break."""
+    root = repo_root(os.getcwd())
+    if not root or not args:
+        print("usage: bwcap.py hollow <probe-id> [--n 6]"); return 2
+    bwd = bw_dir(root)
+    n = int(args[args.index("--n") + 1]) if "--n" in args else 6
+    now = snapshot(root, "cli", "now")
+    p = {x["id"]: x for x in load_probes(root, now)}.get(probe_id(args[0]))
+    if not p or p.get("bad"):
+        print("bw: no probe %r." % args[0]); return 2
+    res = hollow_run(root, bwd, now, p, n)
+    if res.get("error"):
+        print("bw: " + res["error"]); return 2 if "names no file" in res["error"] else 1
+    covers, tried, caught, aim = res["covers"], res["tried"], res["caught"], res["aim"]
     if not tried:
         print("bw: no line in %s has a comparison or boolean bw can flip." % ", ".join(covers)); return 0
     print("bw hollow check: %s\n  %d of %d planted breaks changed the output." % (p["id"], len(caught), len(tried)))
@@ -3499,6 +3525,415 @@ def render_plan(bwd, root, pid):
 
 
 
+# ---------- onboarding: seed bw's understanding of a project on day 0 ----------
+# `/bw:onboard` runs `onboard scan` (git and static facts only: structure, languages, entry points, test names per area,
+# test commands, docs, churn) and hands the agent a worklist. The agent, read-only, writes probes for the most important
+# behaviors of the top areas and for rules quoted from the docs, plus one sentence per area. `onboard verify` then runs every
+# probe twice, checks every citation and quote against the files, plants a few breaks to catch hollow probes, and puts the
+# probes that pass in front of the engineer (Keep / Wrong / Skip). Kept outputs become beliefs. bw makes no LLM call.
+
+DOC_NAMES = re.compile(r"^(AGENTS|CLAUDE|README|CONTRIBUTING|ARCHITECTURE|DESIGN|HACKING|DEVELOPMENT|CONVENTIONS)(\.[\w.]+)?$", re.I)
+DOC_PATHS = re.compile(r"(^|/)(\.claude/CLAUDE\.md|\.github/copilot-instructions\.md|\.cursorrules|\.cursor/rules/[^/]+|docs?/[^/]+\.(md|rst|txt|adoc))$", re.I)
+TEST_NAME_RX = [
+    (re.compile(r"\.py$"), re.compile(r"^\s*(?:async\s+)?def\s+(test_\w+)", re.M)),
+    (re.compile(r"\.(js|jsx|ts|tsx|mjs|cjs)$"), re.compile(r"""\b(?:it|test)\s*\(\s*['"`]([^'"`]{3,120})""")),
+    (re.compile(r"\.go$"), re.compile(r"^func\s+(Test\w+)\s*\(", re.M)),
+    (re.compile(r"\.(kt|kts|java|scala)$"), re.compile(r"@Test[\s\S]{0,200}?\b(?:fun|void)\s+`?([^`(\s]+(?:\s[^`(]+)*)`?\s*\(")),
+    (re.compile(r"\.rs$"), re.compile(r"#\[(?:tokio::)?test\][\s\S]{0,120}?\bfn\s+(\w+)")),
+    (re.compile(r"\.rb$"), re.compile(r"""^\s*(?:it|test)\s+['"]([^'"]{3,120})""", re.M)),
+    (re.compile(r"\.swift$"), re.compile(r"func\s+(test\w+)\s*\(")),
+    (re.compile(r"\.cs$"), re.compile(r"\[(?:Fact|Test|TestMethod|Theory)\][\s\S]{0,200}?\b(?:void|Task)\s+(\w+)\s*\(")),
+    (re.compile(r"\.php$"), re.compile(r"function\s+(test\w+)\s*\(")),
+    (re.compile(r"\.(ex|exs)$"), re.compile(r"""^\s*test\s+"([^"]{3,120})""", re.M)),
+]
+ENTRY_RX = re.compile(r"(^|/)(main\.(py|go|rs|ts|js|kt|java|swift|c|cpp)|__main__\.py|app\.(py|ts|js)|manage\.py|server\.(py|ts|js|go)|"
+                      r"index\.(ts|js|tsx|jsx)|cli\.(py|ts|js|go)|Program\.cs|Application\.(kt|java)|[A-Z]\w*Application\.(kt|java)|"
+                      r"MainActivity\.(kt|java)|App\.(tsx|jsx|swift|kt)|routes?\.(py|ts|js|rb|go|php)|urls\.py|lib\.rs|mod\.rs)$")
+LANG_OF = {".py": "Python", ".js": "JavaScript", ".jsx": "JavaScript", ".mjs": "JavaScript", ".ts": "TypeScript", ".tsx": "TypeScript",
+           ".go": "Go", ".rs": "Rust", ".java": "Java", ".kt": "Kotlin", ".kts": "Kotlin", ".swift": "Swift", ".rb": "Ruby",
+           ".php": "PHP", ".cs": "C#", ".c": "C", ".h": "C", ".cc": "C++", ".cpp": "C++", ".hpp": "C++", ".scala": "Scala",
+           ".ex": "Elixir", ".exs": "Elixir", ".dart": "Dart", ".m": "Objective-C", ".vue": "Vue", ".svelte": "Svelte", ".sql": "SQL"}
+FIX_SUBJECT = re.compile(r"\b(fix(es|ed)?|bug|revert|regression|hotfix|crash|broken)\b", re.I)
+ONBOARD_MAX_PROBES = 20
+
+
+def onboard_dir(bwd):
+    d = os.path.join(bwd, "onboard")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _area_prefix(r):
+    return [p.split("*")[0] for p in r.get("paths", [])]
+
+
+def _area_of(m, path):
+    r = region_of(m, path)
+    return r
+
+
+def test_commands(root, files):
+    names = set(files)
+    cmds = []
+    pk = load(os.path.join(root, "package.json"), None) if "package.json" in names else None
+    if pk and isinstance(pk.get("scripts"), dict):
+        for k in ("test", "test:unit", "check"):
+            if k in pk["scripts"]:
+                cmds.append("npm run %s  (%s)" % (k, str(pk["scripts"][k])[:80]))
+    if names & {"pytest.ini", "tox.ini", "setup.cfg", "pyproject.toml", "conftest.py"} and any(f.endswith(".py") for f in files):
+        cmds.append("pytest")
+    if "go.mod" in names:
+        cmds.append("go test ./...")
+    if "Cargo.toml" in names:
+        cmds.append("cargo test")
+    if "gradlew" in names:
+        cmds.append("./gradlew test")
+    elif "pom.xml" in names:
+        cmds.append("mvn test")
+    if "Package.swift" in names:
+        cmds.append("swift test")
+    if "Gemfile" in names and any(f.startswith("spec/") for f in files):
+        cmds.append("bundle exec rspec")
+    if any(f.endswith((".csproj", ".sln")) for f in files):
+        cmds.append("dotnet test")
+    if "mix.exs" in names:
+        cmds.append("mix test")
+    if "Makefile" in names:
+        try:
+            if re.search(r"^test\s*:", open(os.path.join(root, "Makefile"), errors="replace").read(), re.M):
+                cmds.append("make test")
+        except Exception:
+            pass
+    return cmds
+
+
+def onboard_scan(root, bwd):
+    """Facts from git and the files only. Returns the scan dict and saves it to .git/bw/onboard/scan.json."""
+    t0 = time.time()
+    m = load_map(root, bwd)
+    if not m.get("regions"):
+        m = draft_map(root)
+        save(os.path.join(bwd, "map.json"), m)
+    files = [f for f in git(["ls-files"], root, check=False).splitlines() if f]
+    code = [f for f in files if os.path.splitext(f)[1].lower() in CODE_EXT and not NOT_CODE.search(f) and not f.startswith(".bw/")]
+    langs = {}
+    for f in code:
+        lg = LANG_OF.get(os.path.splitext(f)[1].lower())
+        if lg:
+            langs[lg] = langs.get(lg, 0) + 1
+    areas = {r["name"]: {"name": r["name"], "paths": r.get("paths", []), "layer": r.get("layer", "code"), "files": 0, "tests": 0,
+                         "test_names": [], "commits": 0.0, "fixes": 0, "hot": {}, "entries": []}
+             for r in m.get("regions", []) if r.get("layer", "code") == "code"}
+    tests = [f for f in files if TEST_PATH.search(f) and os.path.splitext(f)[1].lower() in CODE_EXT]
+    for f in code:
+        a = region_of(m, f)
+        if a in areas and not TEST_PATH.search(f):
+            areas[a]["files"] += 1
+            if ENTRY_RX.search(f) and len(areas[a]["entries"]) < 6:
+                areas[a]["entries"].append(f)
+    # tests: filed under the area whose files they name (same stem) or whose folder they mirror; else "unplaced"
+    stem_area = {}
+    for f in code:
+        a = region_of(m, f)
+        if a in areas and not TEST_PATH.search(f):
+            stem_area.setdefault(os.path.splitext(os.path.basename(f))[0].lower(), a)
+    unplaced, tnames_total = 0, 0
+    for f in tests[:4000]:
+        stem = re.sub(r"(^test_|_test$|_spec$|\.test$|\.spec$|tests?$|spec$)", "", os.path.splitext(os.path.basename(f))[0], flags=re.I).lower()
+        a = stem_area.get(stem)
+        if not a:
+            mirror = re.sub(r"(^|/)(src/)?(test|tests|spec|__tests__|androidTest|commonTest|jvmTest|iosTest)(/|$)", r"\1\2main\4", f)
+            a = region_of(m, mirror) if mirror != f else None
+            a = a if a in areas else (region_of(m, f) if region_of(m, f) in areas else None)
+        names = []
+        for frx, nrx in TEST_NAME_RX:
+            if frx.search(f):
+                try:
+                    if os.path.getsize(os.path.join(root, f)) < 400000:
+                        names = nrx.findall(open(os.path.join(root, f), errors="replace").read())
+                except Exception:
+                    pass
+                break
+        tnames_total += len(names)
+        if a:
+            areas[a]["tests"] += 1
+            for nm in names:
+                if len(areas[a]["test_names"]) < 12:
+                    areas[a]["test_names"].append(nm.strip()[:100])
+            areas[a]["test_count"] = areas[a].get("test_count", 0) + len(names)
+        else:
+            unplaced += 1
+    # churn: last 12 months, at most 5,000 commits; commits over 40 files count 0.2
+    log = git(["log", "--since=12 months ago", "-n", "5000", "--no-merges", "--name-only", "--format=%x00%s"], root, check=False)
+    ncommits = 0
+    for chunk in log.split("\0")[1:]:
+        lines = [l for l in chunk.split("\n") if l.strip()]
+        if not lines:
+            continue
+        ncommits += 1
+        subj, fs = lines[0], lines[1:]
+        w = 0.2 if len(fs) > 40 else 1.0
+        hit = {}
+        for f in fs:
+            a = region_of(m, f)
+            if a in areas:
+                hit.setdefault(a, []).append(f)
+        for a, afs in hit.items():
+            areas[a]["commits"] += w
+            if FIX_SUBJECT.search(subj):
+                areas[a]["fixes"] += 1
+            for f in afs:
+                if not TEST_PATH.search(f) and os.path.splitext(f)[1].lower() in CODE_EXT:
+                    areas[a]["hot"][f] = areas[a]["hot"].get(f, 0) + w
+    for a in areas.values():
+        a["commits"] = round(a["commits"], 1)
+        a["score"] = round(a["commits"] + 2 * a["fixes"] + (0.5 * a["files"] if not ncommits else 0), 1)
+        a["hot"] = [f for f, _ in sorted(a["hot"].items(), key=lambda kv: -kv[1])[:5] if os.path.exists(os.path.join(root, f))]
+        if not a["hot"]:
+            a["hot"] = [f for f in code if region_of(m, f) == a["name"] and not TEST_PATH.search(f)][:5]
+    ranked = sorted((a for a in areas.values() if a["files"]), key=lambda a: -a["score"])
+    focus = [a["name"] for a in ranked[:5]]
+    docs = [f for f in files if (DOC_NAMES.match(os.path.basename(f)) and f.count("/") <= 2) or DOC_PATHS.search(f)]
+    docs = sorted(docs, key=lambda f: (0 if re.match(r"(AGENTS|CLAUDE)", os.path.basename(f), re.I) else 1 if f.count("/") == 0 else 2, f))[:12]
+    scan = {"at": time.time(), "head": git(["rev-parse", "--short", "HEAD"], root, check=False).strip(), "files": len(files),
+            "code_files": len(code), "languages": sorted(langs.items(), key=lambda kv: -kv[1])[:6], "commits_12m": ncommits,
+            "tests": len(tests), "test_names": tnames_total, "tests_unplaced": unplaced, "test_commands": test_commands(root, files),
+            "docs": docs, "areas": ranked + [a for a in areas.values() if not a["files"]], "focus": focus,
+            "secs": round(time.time() - t0, 1)}
+    save(os.path.join(onboard_dir(bwd), "scan.json"), scan)
+    return scan
+
+
+def onboard_worklist(scan, script):
+    out = ["bw onboarding scan of this repo (git and files only, %.1f s)" % scan["secs"],
+           "  %d files, %d code files; %s; %d commits in the last 12 months; %d test files, %d test names found" % (
+               scan["files"], scan["code_files"], ", ".join("%s %d" % tuple(kv) for kv in scan["languages"]) or "no code found",
+               scan["commits_12m"], scan["tests"], scan["test_names"]),
+           "  test commands found (not run): %s" % (", ".join(scan["test_commands"]) or "none"), "",
+           "DOCS to read first:"] + ["  " + d for d in scan["docs"]] + ([""] if scan["docs"] else ["  (none found)", ""])
+    out.append("FOCUS areas, most changed and most fixed first:")
+    by = {a["name"]: a for a in scan["areas"]}
+    for i, n in enumerate(scan["focus"]):
+        a = by[n]
+        out.append("  %d. %s  [%s]  %d files, %.0f commits, %d fix commits, %d test files" % (
+            i + 1, n, ", ".join(p.replace("/**", "/") for p in a["paths"]), a["files"], a["commits"], a["fixes"], a["tests"]))
+        if a["entries"]:
+            out.append("     entry points: " + ", ".join(a["entries"][:4]))
+        out.append("     most changed: " + ", ".join(a["hot"][:4]))
+    others = [a["name"] for a in scan["areas"] if a["name"] not in scan["focus"] and a["files"]]
+    if others:
+        out.append("  other areas: " + ", ".join(others))
+    out.append("")
+    out.append("Next: write the probes and .bw/project.json as the /bw:onboard instructions say, then run:")
+    out.append("  python3 \"%s\" onboard verify" % script)
+    return "\n".join(out)
+
+
+def _quote_in(text, quote):
+    norm = lambda x: re.sub(r"[\s*_`>#-]+", " ", x).strip().lower()
+    return bool(quote) and norm(quote) in norm(text or "")
+
+
+def onboard_verify(root, bwd, budget=300):
+    """Run every probe twice at the working tree, check citations, quotes and (within budget) planted breaks.
+    Writes .git/bw/onboard/result.json, an onboarding task for the watch room, and onboard.html."""
+    t0 = time.time()
+    scan = load(os.path.join(onboard_dir(bwd), "scan.json"), None) or onboard_scan(root, bwd)
+    m = load_map(root, bwd)
+    now = snapshot(root, "onboard", "verify")
+    probes = load_probes(root, now)
+    project = load(os.path.join(root, ".bw", "project.json"), None)
+    project = project if isinstance(project, list) else (project or {}).get("areas", []) if isinstance(project, dict) else []
+    cache = _obs_cache(bwd)
+    rows = []
+    for p in probes[:40]:
+        row = {"probe": p["id"], "scenario": p.get("scenario", ""), "finding": p.get("finding") or p.get("scenario", ""),
+               "cmd": p.get("cmd", ""), "covers": p.get("covers", []), "area": p.get("area", ""), "kind": p.get("kind", "behavior"),
+               "entry": p.get("entry", ""), "quote": p.get("quote", ""), "source": p.get("source", ""), "problems": []}
+        if p.get("bad"):
+            row["problems"].append(p["bad"])
+            rows.append(row)
+            continue
+        if not row["area"]:
+            regs = [region_of(m, c) for c in row["covers"]]
+            row["area"] = next((r for r in regs if r), "")
+        missing = [c for c in row["covers"] if show(root, now, c) is None]
+        if not row["covers"]:
+            row["problems"].append("names no file in \"covers\"")
+        elif missing:
+            row["problems"].append("covers a file that does not exist: " + ", ".join(missing[:3]))
+        if row["entry"]:
+            ep, eline, _ = parse_at(row["entry"])
+            txt = show(root, now, ep) if ep else None
+            if txt is None:
+                row["problems"].append("entry %s is not a file in the repo" % row["entry"])
+            elif eline and eline > txt.count("\n") + 1:
+                row["problems"].append("entry %s is past the end of the file" % row["entry"])
+            else:
+                row["entry_ok"] = 1
+        if row["kind"] == "rule":
+            src = show(root, now, row["source"]) if row["source"] else None
+            if not row["quote"] or src is None:
+                row["problems"].append("a rule probe needs \"quote\" and the \"source\" doc it is from")
+            elif not _quote_in(src, row["quote"]):
+                row["problems"].append("the quoted line is not in %s" % row["source"])
+        if time.time() - t0 > budget:
+            row["problems"].append("bw ran out of time before running it")
+            rows.append(row)
+            continue
+        o = observe(root, bwd, now, p, 2, cache)
+        row.update(after=o["out"], exit=o["exit"], ms=o["ms"], stable=o.get("stable", True))
+        if o["exit"] in CANT_TELL_EXIT:
+            row["problems"].append("could not run: " + cant_tell_why(o))
+        elif not o.get("stable", True):
+            row["problems"].append("prints something different on each run")
+        rows.append(row)
+    _obs_save(bwd, cache)
+    # hollow check on the probes that passed, cheapest first, within what is left of the budget
+    for row in sorted([r for r in rows if not r["problems"]], key=lambda r: r.get("ms", 0)):
+        if time.time() - t0 > budget * 0.8 or row["kind"] == "rule":
+            continue
+        p = next(x for x in probes if x["id"] == row["probe"])
+        try:
+            h = hollow_run(root, bwd, now, p, 3)
+        except Exception:
+            continue
+        if h.get("tried"):
+            row["hollow"] = [len(h["caught"]), len(h["tried"])]
+    ok = [r for r in rows if not r["problems"]]
+    bad = [r for r in rows if r["problems"]]
+    for pa in project:
+        if isinstance(pa, dict) and pa.get("entry"):
+            ep, eline, _ = parse_at(pa["entry"])
+            txt = show(root, now, ep) if ep else None
+            pa["entry_ok"] = bool(txt is not None and (not eline or eline <= txt.count("\n") + 1))
+    result = {"at": time.time(), "commit": now, "scan": scan, "project": project, "rows": rows,
+              "ok": len(ok), "failed": len(bad), "secs": round(time.time() - t0, 1)}
+    save(os.path.join(onboard_dir(bwd), "result.json"), result)
+    # A new onboarding replaces the previous one's undecided items (decided ones are already beliefs or findings).
+    fs = load_findings(bwd)
+    st = load(os.path.join(bwd, "state.json"), {}) or {}
+    for old in [t for t in os.listdir(os.path.join(bwd, "tasks")) if t.startswith("onboard-")]:
+        keys = [k for k in fs["findings"] if k.startswith(old + "-f-")]
+        if not any(k in (st.get("done") or {}) or fs["findings"][k]["status"] != "open" for k in keys):
+            for k in keys:
+                fs["findings"].pop(k, None)
+            shutil.rmtree(os.path.join(bwd, "tasks", old), ignore_errors=True)
+    save(findings_path(bwd), fs)
+    render_onboard(bwd, root, result)
+    # the probes that passed go to the watch room as onboarding items: Keep (belief), Wrong (a finding to fix), Skip
+    tid = "onboard-" + time.strftime("%Y%m%d-%H%M%S")
+    d = os.path.join(bwd, "tasks", tid)
+    os.makedirs(d, exist_ok=True)
+    findings = [dict(r, verdict="shown", finding=r["finding"]) for r in ok]
+    data = {"title": "Onboarding: %d probe%s on %d area%s" % (len(ok), "" if len(ok) == 1 else "s", len({r["area"] for r in ok}),
+                                                              "" if len({r["area"] for r in ok}) == 1 else "s"),
+            "task": tid, "start": now[:8], "end": now, "totals": {"files": 0, "add": 0, "del": 0}, "regions": [], "unmapped": [],
+            "layers": m.get("layers", []), "cards": [], "unknown": [], "loose": [], "findings": findings, "review": 1, "onboard": 1,
+            "unshown": ["%s (probe %s: %s)" % (r["finding"][:120], r["probe"], "; ".join(r["problems"])) for r in bad]}
+    save(os.path.join(d, "data.json"), data)
+    save(os.path.join(d, "task.json"), {"id": tid, "root": root, "start": now, "end": now, "started": t0, "ended": time.time(),
+                                        "prompts": ["/bw:onboard"], "mode": "onboard"})
+    save(os.path.join(d, "summary.json"), {"id": tid, "title": data["title"], "ended": time.time(), "regions": {}, "files": 0,
+                                           "add": 0, "del": 0, "cards": [], "unknown": 0, "href": "onboard.html", "run": tid})
+    fs = load_findings(bwd)
+    for r in ok:
+        fs["findings"]["%s-f-%s" % (tid, r["probe"])] = {"pid": r["probe"], "task": tid, "finding": r["finding"], "covers": r["covers"],
+                                                          "status": "open", "at": time.time(), "out": r.get("after", ""), "seed": 1}
+    save(findings_path(bwd), fs)
+    render_home(bwd, m, root)
+    tele_count(bwd, {"onboard_probes_ok": len(ok), "onboard_probes_failed": len(bad)})
+    return result
+
+
+def render_onboard(bwd, root, res):
+    """The onboarding page: what bw now knows about the project, each fact labelled by where it comes from."""
+    e = lambda x: html.escape(str(x))
+    scan = res["scan"]
+    by_area = {}
+    for r in res["rows"]:
+        by_area.setdefault(r["area"] or "Other", []).append(r)
+    summ = {pa.get("area"): pa for pa in res.get("project", []) if isinstance(pa, dict)}
+    def probe_card(r):
+        tag = ("<span class='tag ok'>ran twice, same output</span>" if not r["problems"] else "<span class='tag bad'>not used</span>")
+        if r.get("hollow"):
+            c, t = r["hollow"]
+            tag += " <span class='tag %s'>%d of %d planted breaks caught</span>" % ("ok" if c else "warn", c, t)
+        rule = ("<div class='quote'><span class='lbl'>%s says</span> “%s”</div>" % (e(r["source"]), e(r["quote"]))) if r["kind"] == "rule" and r["quote"] else ""
+        out = ("<pre>%s</pre>" % e(r.get("after", ""))) if r.get("after") else ""
+        probs = ("<div class='probs'>%s</div>" % "<br>".join(e(x) for x in r["problems"])) if r["problems"] else ""
+        entry = (" · way in <code>%s</code>%s" % (e(r["entry"]), " ✓" if r.get("entry_ok") else "")) if r["entry"] else ""
+        return ("<div class='probe'><div class='ph'><b>%s</b> %s</div><div class='sc'>%s%s</div>%s"
+                "<div class='cmd'>$ %s</div>%s%s</div>" % (e(r["finding"]), tag, e(r["scenario"]), entry, rule, e(r["cmd"]), out, probs))
+    areas_html = []
+    for a in scan["areas"]:
+        if not a["files"]:
+            continue
+        rs = by_area.get(a["name"], [])
+        sm = summ.get(a["name"]) or {}
+        say = ("<p class='say'>%s <span class='src'>agent's words%s</span></p>" % (
+            e(sm.get("summary", "")), (" · way in <code>%s</code> %s" % (e(sm["entry"]), "✓ exists" if sm.get("entry_ok") else "✗ not found")) if sm.get("entry") else "")) if sm.get("summary") else ""
+        tn = ", ".join(e(x) for x in a["test_names"][:4])
+        areas_html.append(
+            "<section class='area%s'><div class='ah'><h3>%s</h3><span class='paths'>%s</span>%s</div>%s"
+            "<div class='facts'><span><b>%d</b> files</span><span><b>%.0f</b> commits in 12 months</span><span><b>%d</b> fix commits</span>"
+            "<span><b>%d</b> test files%s</span><span><b>%d</b> probes</span></div>%s%s</section>" % (
+                " focus" if a["name"] in scan["focus"] else "", e(a["name"]), e(", ".join(p.replace("/**", "/") for p in a["paths"])),
+                "<span class='tag'>onboarded</span>" if a["name"] in scan["focus"] else "", say,
+                a["files"], a["commits"], a["fixes"], a["tests"], (" (%d tests)" % a.get("test_count", 0)) if a.get("test_count") else "",
+                len([r for r in rs if not r["problems"]]),
+                ("<div class='tn'>Tests here, e.g. %s</div>" % tn) if tn else ("<div class='tn warn'>No tests found for this area.</div>" if a["name"] in scan["focus"] else ""),
+                "".join(probe_card(r) for r in rs)))
+    other = by_area.get("Other", [])
+    docs = "".join("<li><code>%s</code></li>" % e(d) for d in scan["docs"]) or "<li>none found</li>"
+    page = ONBOARD_PAGE.format(
+        repo=e(os.path.basename(root)), head=e(scan["head"]), files=scan["files"], code=scan["code_files"],
+        langs=e(", ".join("%s %d" % tuple(kv) for kv in scan["languages"])), commits=scan["commits_12m"], tests=scan["tests"],
+        tnames=scan["test_names"], cmds=e(", ".join(scan["test_commands"]) or "none found"), docs=docs, ok=res["ok"], failed=res["failed"],
+        nareas=len({r["area"] for r in res["rows"] if not r["problems"]}), areas="".join(areas_html) + (
+            "<section class='area'><div class='ah'><h3>Not tied to an area</h3></div>%s</section>" % "".join(probe_card(r) for r in other) if other else ""),
+        secs=res["secs"])
+    with open(os.path.join(bwd, "onboard.html"), "w") as f:
+        f.write(page)
+
+
+ONBOARD_PAGE = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>bw onboarding · {repo}</title><style>
+:root{{--bg:#f6f7f5;--panel:#fff;--fg:#1b1f1d;--muted:#5b645f;--line:#d9dfdb;--accent:#1f6f5c;--soft:#e2f0ea;--warn:#9a5b00;--wsoft:#fbf0dc;--bad:#a23b2e;--bsoft:#f8e4e0;--code:#eef1ef}}
+@media (prefers-color-scheme:dark){{:root{{--bg:#121614;--panel:#1a201d;--fg:#e4e9e6;--muted:#9aa59f;--line:#2c3531;--accent:#5cc3a4;--soft:#183129;--warn:#e0a54a;--wsoft:#33270f;--bad:#ec8576;--bsoft:#3a1c18;--code:#202825;color-scheme:dark}}}}
+body{{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 system-ui,-apple-system,Segoe UI,sans-serif}}
+.wrap{{max-width:960px;margin:0 auto;padding:28px 16px 60px;display:grid;gap:22px}}
+h1,h2,h3{{margin:0;line-height:1.25}} h1{{font-size:26px}} h2{{font-size:18px}} h3{{font-size:16px}}
+code,pre,.cmd{{font-family:ui-monospace,Menlo,monospace;font-size:12.5px}} code{{background:var(--code);padding:1px 4px;border-radius:4px}}
+pre{{background:var(--code);border-radius:6px;padding:8px 10px;margin:6px 0 0;overflow-x:auto;white-space:pre-wrap}}
+.sub{{color:var(--muted)}} .kpis{{display:flex;flex-wrap:wrap;gap:10px}}
+.kpi{{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px;min-width:120px}} .kpi b{{font-size:22px;display:block}}
+.cta{{background:var(--soft);border-radius:10px;padding:14px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}}
+.cta a{{background:var(--accent);color:var(--bg);padding:8px 14px;border-radius:8px;text-decoration:none;font-weight:600}}
+.area{{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:grid;gap:8px}}
+.area.focus{{border-color:var(--accent)}} .ah{{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline}} .paths{{color:var(--muted);font-size:13px;font-family:ui-monospace,Menlo,monospace}}
+.facts{{display:flex;flex-wrap:wrap;gap:14px;font-size:13.5px;color:var(--muted)}} .facts b{{color:var(--fg)}}
+.say{{margin:0}} .src{{font-size:12px;color:var(--muted);margin-left:6px}} .tn{{font-size:13px;color:var(--muted)}} .tn.warn{{color:var(--warn)}}
+.probe{{border-top:1px solid var(--line);padding-top:8px;display:grid;gap:3px}} .ph{{display:flex;flex-wrap:wrap;gap:6px;align-items:baseline}}
+.sc{{font-size:13.5px;color:var(--muted)}} .cmd{{color:var(--muted)}} .quote{{font-size:13.5px;background:var(--wsoft);padding:6px 8px;border-radius:6px}}
+.lbl{{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:600}}
+.probs{{color:var(--bad);font-size:13px}} .tag{{font-size:11px;font-weight:600;padding:2px 7px;border-radius:999px;background:var(--code);color:var(--muted)}}
+.tag.ok{{background:var(--soft);color:var(--accent)}} .tag.warn{{background:var(--wsoft);color:var(--warn)}} .tag.bad{{background:var(--bsoft);color:var(--bad)}}
+.side{{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}} .side>div{{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}}
+ul{{margin:6px 0 0;padding-left:18px}}
+</style></head><body><div class="wrap">
+<header style="display:grid;gap:6px"><div class="sub">bw onboarding · {repo} at {head}</div><h1>What bw knows about this project</h1>
+<p class="sub">Structure, history and tests come from git and the files. Each probe ran on the code twice and printed the same. Area summaries are the agent's words, marked as such; bw checked only that the files and lines they cite exist.</p></header>
+<div class="kpis"><div class="kpi"><b>{ok}</b>probes that run</div><div class="kpi"><b>{nareas}</b>areas covered</div><div class="kpi"><b>{tests}</b>test files ({tnames} tests)</div><div class="kpi"><b>{commits}</b>commits, 12 months</div><div class="kpi"><b>{failed}</b>probes not used</div></div>
+<div class="cta"><div><b>Next: decide on each probe.</b> Keep = this is how it should behave (bw re-checks it after every agent task and tells you if it changes). Wrong = it is a bug to fix. Skip = not interesting.</div><a href="home.html#catchup">Open the decisions</a></div>
+<div class="side"><div><span class="lbl">Project</span><div>{files} files, {code} code files</div><div class="sub">{langs}</div></div>
+<div><span class="lbl">Test commands found (not run)</span><div>{cmds}</div></div><div><span class="lbl">Docs read</span><ul>{docs}</ul></div></div>
+<h2>Areas, most changed first</h2>
+{areas}
+<p class="sub">Onboarding check took {secs} s. Re-run any time: /bw:onboard</p>
+</div></body></html>"""
+
+
 # ---------- telemetry: opt-in, counts only, every field allowlisted ----------
 # bw keeps a few daily counts in its own folder (~/.config/bw, never in a repo) so `/bw:telemetry show` and `/bw:doctor`
 # can say what happened. Nothing leaves the machine unless the person runs `/bw:telemetry on`. Then, at most once a day,
@@ -3507,7 +3942,7 @@ def render_plan(bwd, root, pid):
 # There is no field that can hold a path, a file or region name, code, a prompt, probe output or a finding: that is the
 # privacy guarantee, not scrubbing. Error messages and tracebacks stay in the local errors.log under a short id.
 
-BW_VERSION = "0.14.1"
+BW_VERSION = "0.15.0"
 TELE_HOST = os.environ.get("BW_TELEMETRY_HOST", "https://us.i.posthog.com")
 TELE_KEY = os.environ.get("BW_TELEMETRY_KEY", "phc_sQTYuZwYQkN3HKFiVo2d2XZ3VJB3YUjCEzYJQWPxZB7t")  # public project key (write-only); empty = never send
 TELE_SEND_EVERY = 20 * 3600
@@ -3515,11 +3950,11 @@ HOOK_TIMEOUT = {"prompt": 60, "post": 30, "stop": 300, "pre": 30, "allow": 10, "
 TELE_OS = ("macos", "linux", "wsl", "windows", "other")
 TELE_HOOKS = tuple(HOOK_TIMEOUT)
 TELE_CMDS = ("on", "off", "home", "stats", "map", "do", "plan", "how", "why", "recall", "receipt", "beliefs", "keep", "findings",
-             "brief", "hollow", "task", "agents-md", "doctor", "telemetry", "serve", "backfill", "render")
+             "brief", "hollow", "task", "agents-md", "doctor", "telemetry", "serve", "backfill", "render", "onboard")
 TELE_COUNTERS = ("tasks", "reviews", "receipts", "probes_run", "changed", "same", "cant_tell", "flaky", "probe_cmd_missing",
                  "probe_timeout", "probe_skipped", "probe_ask", "first_probe_ask", "probe_ask_answered", "no_probe_reply",
                  "findings_shown", "findings_unshown", "beliefs_run", "beliefs_broke", "pages", "plan_opened", "plan_approved",
-                 "plan_changes", "brief_sent")
+                 "plan_changes", "brief_sent", "onboard_scans", "onboard_probes_ok", "onboard_probes_failed")
 TELE_DECISIONS = ("fix", "expected", "skip", "keep", "not_intended", "leave_open", "predicted", "other")
 TELE_FILES = ("0", "1-3", "4-10", "11+")
 TELE_RTIME = ("<10s", "<60s", "<180s", "180s+")
@@ -3999,6 +4434,36 @@ def cmd_telemetry(args):
     print(TELE_SAYS.format(state="on" if tele_on() else ("off (%s)" % tele_blocked() if tele_conf().get("on") else "off"), home=bw_home()))
 
 
+def cmd_onboard(args):
+    """bwcap.py onboard scan | verify"""
+    root = repo_root(os.getcwd())
+    if not root:
+        print("bw: this folder is not inside a git repository"); return 1
+    if not enabled(root):
+        cmd_on([root])
+        print("")
+    bwd = bw_dir(root)
+    sub = args[0] if args else "scan"
+    if sub == "scan":
+        scan = onboard_scan(root, bwd)
+        tele_count(bwd, {"onboard_scans": 1})
+        print(onboard_worklist(scan, os.path.abspath(__file__)))
+        return 0
+    if sub == "verify":
+        res = onboard_verify(root, bwd)
+        print("bw onboarding: %d probe%s run and stay stable, %d not used (%.0f s)." % (res["ok"], "" if res["ok"] == 1 else "s", res["failed"], res["secs"]))
+        for r in res["rows"]:
+            if r["problems"]:
+                print("  not used: %s - %s" % (r["probe"], "; ".join(r["problems"])))
+            elif r.get("hollow") and not r["hollow"][0]:
+                print("  may be hollow: %s - none of %d planted breaks changed its output" % (r["probe"], r["hollow"][1]))
+        info = server_info(bwd)
+        url = home_url(root, bwd)
+        print("Onboarding page: %s" % (url.replace("home.html", "onboard.html") if url.startswith("http") else "file://" + os.path.join(bwd, "onboard.html")))
+        return 0
+    print("usage: bwcap.py onboard scan | verify"); return 2
+
+
 def cmd_doctor(args):
     """Read-only setup check, or one local error by id: bwcap.py doctor [e1a2]"""
     if args and _RX_ERRID.match(args[0]):
@@ -4083,7 +4548,8 @@ def main():
 
 def _dispatch():
     cli = {"receipt": cmd_receipt, "beliefs": cmd_beliefs, "keep": cmd_keep, "agents-md": cmd_agents_md, "task": cmd_task,
-           "how": cmd_how, "why": cmd_why, "recall": cmd_recall, "brief": cmd_brief, "findings": cmd_findings, "hollow": cmd_hollow}
+           "how": cmd_how, "why": cmd_why, "recall": cmd_recall, "brief": cmd_brief, "findings": cmd_findings, "hollow": cmd_hollow,
+           "onboard": cmd_onboard}
     if len(sys.argv) >= 2 and sys.argv[1] in cli:
         sys.exit(cli[sys.argv[1]](sys.argv[2:]) or 0)
     if len(sys.argv) >= 2 and sys.argv[1] == "do":

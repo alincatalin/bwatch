@@ -34,12 +34,28 @@ The watch room keeps the map, timeline, test-run marks, plan pages and steering 
 
     claude plugin install bw --marketplace alincatalin/bwatch
 
-Restart Claude Code in any git repo and type `/bw:on`. It drafts a map from your folders, checks your setup and says what
-happens on the first task. Needs python3 (3.8+) and git; macOS, Linux or WSL. Update with `claude plugin update bw@bw`,
+Restart Claude Code in any git repo and type `/bw:on` (checks your setup), then `/bw:onboard` (10-15 minutes, changes
+no code): bw scans the repo and the agent writes and verifies probes for its most important behaviors. Needs python3 (3.8+) and git; macOS, Linux or WSL. Update with `claude plugin update bw@bw`,
 then restart. New here? Read [FRIENDS.md](FRIENDS.md).
 
 Working on bw itself: `bash install.sh /path/to/repo` installs from this folder (keep the folder; Claude Code runs the
 plugin from it).
+
+## Onboard
+
+`/bw:onboard` gives bw a checked starting point in a repo that has no probes yet.
+
+1. bw scans git and the files, no LLM: languages, areas, test files and test names per area, test commands, docs
+   (AGENTS.md, CLAUDE.md, README, docs/), and 12 months of churn and fix commits. The 5 most-changed areas are the focus.
+2. The agent reads the docs and each focus area's entry points, then writes 2 to 4 probes per area for the behaviors users
+   depend on, plus up to 4 "rule" probes that quote a line from the docs and show what the code does about it. The
+   session is read-only: edits outside `.bw/` are refused.
+3. bw verifies every probe: runs it twice on a clean copy, checks its covered files and entry point exist, checks rule
+   quotes appear in the docs, and plants breaks in the covered code to see whether the probe notices. Probes that fail
+   are listed as not used.
+4. The onboarding page shows each area with the agent's one-line summary, the facts from the scan and the verified
+   probes. Each probe is also a watch-room item: Keep makes it a belief bw re-checks after every later task, Wrong asks
+   for a fix, Skip drops it.
 
 ## Use
 
@@ -91,6 +107,12 @@ different output on each run is marked flaky and never counted as a change. Limi
 ## Cloud threads
 
 The watch room runs on 127.0.0.1, which a cloud session can't share. When bw runs on the repo named by `BW_REPO` it also writes a static snapshot to `<repo>/watch.html` after every task (or to the file `BW_PAGE` names). Decide findings by writing `fix finding <name>`, `expected finding <name>` or `skip finding <name>` in chat: bw records it from the prompt, even inside the hosted session's wrapper text, and task titles use the person's words, not that wrapper.
+
+## 0.15.0
+
+- `/bw:onboard`: scan, agent-written probes per area, verification (two runs, planted breaks, doc quotes checked) and an
+  onboarding page; probes become Keep / Wrong / Skip items in the watch room. Read-only. `/bw:on` now points to it.
+- Telemetry counts onboarding scans and how many probes passed or failed verification.
 
 ## 0.14.1
 

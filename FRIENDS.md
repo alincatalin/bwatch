@@ -14,17 +14,20 @@ You need Claude Code, python3 (3.8 or newer) and git, on macOS, Linux or WSL. Na
        claude plugin install bw --marketplace alincatalin/bwatch
 
 2. Quit any open Claude Code sessions and start one in a git repo you work on.
-3. Type `/bw:on`. It checks your setup, sketches a map of the repo from its folders, and explains what happens next.
+3. Type `/bw:on`. It checks your setup and asks once about telemetry.
+4. Type `/bw:onboard`. It takes 10 to 15 minutes and changes no code. bw scans the repo (structure, tests, docs such as
+   AGENTS.md and README, and which areas change most), then the agent writes small probes for the most important
+   behaviors in each area. bw runs every probe twice and plants breaks in the code to check each one would notice a
+   change. You get an onboarding page with what it found.
+5. Open the watch room link it prints and go through the probes: **Keep** if the output is what the code should do,
+   **Wrong** if it isn't, **Skip** if you don't care. What you keep, bw re-checks after every later task.
 
 bw does nothing in a repo until you run `/bw:on` there.
 
 ## What to expect
 
-- **Your first code task** in a repo with no probes: when the agent finishes, bw asks it once to write its first 1 to 3
-  probes. That takes about a minute. From then on, each task ends with a receipt showing the before and after outputs.
-- **A good first try that changes no code:** `/bw:how <a question about your code>`, for example
-  `/bw:how what happens when a payment webhook arrives twice?` The agent answers with probes that run, and you mark each
-  finding Fix this, Expected or Skip.
+- **After onboarding**, each code task ends with a receipt: the probes run on the code before and after the change, and
+  you see both outputs side by side. If something you kept changes, bw says so first.
 - **The watch room** (`/bw:home`) is a local page on 127.0.0.1 showing receipts, findings and your decisions.
 - **Something looks off?** Run `/bw:doctor`. It checks python, git and the hooks, and lists recent bw errors.
 

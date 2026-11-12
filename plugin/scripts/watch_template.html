@@ -465,6 +465,7 @@ function itemCard(it){
   c.appendChild(h('div',{cls:'stripe'})).style.background=CLS[it.cls];
   var b=h('div',{cls:'body'});c.appendChild(b);
   var kind={predict:'Behavior changed',removed:'Capability removed',unknown:'Unknown',kept:'Your decision touched',result:'You asked',bulk:'Bulk change',receipt:'Behavior receipt',broken:'Your belief broke',noreceipt:'No receipt',finding:'Review finding · shown by a run',unshown:'Not shown by a run',notfixed:'You asked to fix · not fixed',canttell:"Can't tell"}[it.kind];
+  if(it.seed)kind='Onboarding · ran on the code as it is';
   if(it.kind==='receipt'&&it.intent==='asked')kind='You asked to fix · fixed';else if(it.kind==='receipt'&&it.intent==='unasked')kind='Changed, not asked';
   if(it.kind==='receipt'&&it.role==='safety')kind='Safe because · '+kind;
   var t=TB[it.task];
@@ -526,6 +527,8 @@ function itemCard(it){
     b.appendChild(h('div',{cls:'rcpt one'},'<div><span class="lbl">What the code prints now</span>'+outPre(it.after,it.after)+'</div>'));
     var fw='Fix this review finding: '+it.title+'. Probe .bw/probes/'+it.pid+' prints now: '+firstLine(it.after)+'. After the fix the same probe must print something else.';
     b.appendChild(h('div',{cls:'act'},'<span class="lbl">Your call</span><button class="btn pri" data-now="Asked to fix" data-w="'+esc(fw)+'">Fix this</button><button class="btn" data-d="Expected">Expected</button><button class="btn" data-d="Skipped">Skip</button><span class="hint" style="margin:0 0 0 6px">Fix this = the next agent task is told, and its receipt says whether this probe changed. Expected = this output becomes your belief.</span>'));
+    if(it.seed){var lastAct=b.lastChild;var fw2='bw onboarding: the engineer marked this behavior as wrong: '+it.title+'. Probe .bw/probes/'+it.pid+' prints now: '+firstLine(it.after)+'. Fix it so the probe prints the right outcome.';
+      lastAct.innerHTML='<span class="lbl">Is this right?</span><button class="btn pri" data-d="Expected">Keep</button><button class="btn" data-now="Asked to fix" data-w="'+esc(fw2)+'">Wrong</button><button class="btn" data-d="Skipped">Skip</button><span class="hint" style="margin:0 0 0 6px">Keep = this is how it should behave; bw re-runs it after every agent task and tells only you if it changes. Wrong = a bug for the next task to fix.</span>';}
     if(COPY)b.appendChild(h('div',{cls:'hint'},'From a cloud thread, say it in chat instead: <b>fix finding '+esc(it.pid)+'</b> · <b>expected '+esc(it.pid)+'</b> · <b>skip '+esc(it.pid)+'</b>'));
   }else if(it.kind==='unshown'){
     b.appendChild(h('div',{cls:'q'},'The agent reported these but wrote no probe that shows them. They are its words, not checked by a run. '+srcTag('unk')));
