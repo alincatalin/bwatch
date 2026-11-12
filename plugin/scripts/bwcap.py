@@ -2227,7 +2227,7 @@ def cmd_on(args):
     conf = tele_conf()
     print("")
     if "on" not in conf:
-        print("  share anonymous usage counts with bw's author?  (off now)")
+        print("  share usage counts with bw's author?  (off now)")
         print("  - only counts, versions and bw's own error codes; never paths, code, prompts,")
         print("    repo names or finding text. See exactly what: /bw:telemetry show")
         print("  - turn on: /bw:telemetry on        turn off any time: /bw:telemetry off")
