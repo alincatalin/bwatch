@@ -108,6 +108,14 @@ different output on each run is marked flaky and never counted as a change. Limi
 
 The watch room runs on 127.0.0.1, which a cloud session can't share. When bw runs on the repo named by `BW_REPO` it also writes a static snapshot to `<repo>/watch.html` after every task (or to the file `BW_PAGE` names). Decide findings by writing `fix finding <name>`, `expected finding <name>` or `skip finding <name>` in chat: bw records it from the prompt, even inside the hosted session's wrapper text, and task titles use the person's words, not that wrapper.
 
+## 0.15.1
+
+- Planted breaks land only on code: never inside strings, docstrings or comments, where a break can't change what the
+  code does (a "missed" break there made good probes look hollow). Breaks also reach the functions a probe's listed
+  functions call.
+- `/bw:onboard` checks rule probes too, and lists each weak probe with the breaks it missed; the agent strengthens it
+  once before you see it.
+
 ## 0.15.0
 
 - `/bw:onboard`: scan, agent-written probes per area, verification (two runs, planted breaks, doc quotes checked) and an

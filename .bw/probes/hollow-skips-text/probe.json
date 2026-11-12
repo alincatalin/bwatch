@@ -1,0 +1,8 @@
+{
+ "scenario": "bwcap.py hollow on a two-condition fee function with a docstring, a message string and a comment that all contain comparisons; one probe uses a table of 5 inputs, one uses a single input",
+ "finding": "Planted breaks land only on code lines; a single-input probe is reported as missing them",
+ "cmd": "python3 -B .bw/probes/hollow-skips-text/run.py",
+ "covers": ["plugin/scripts/bwcap.py"],
+ "entry": "plugin/scripts/bwcap.py:3023",
+ "functions": ["hollow_run", "cmd_hollow", "mutate", "code_mask", "text_lines"]
+}

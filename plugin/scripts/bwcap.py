@@ -2871,6 +2871,57 @@ MUTATIONS = [(r"==", "!="), (r"!=", "=="), (r"<=", "<"), (r">=", ">"), (r"(?<![<
 SKIP_MUT = re.compile(r"^\s*(#|//|\*|/\*|import |from |package |\"\"\"|''')")
 
 
+def text_lines(text):
+    """Line indexes that are prose, not code: inside strings that span lines (Python triple quotes, JS backticks).
+    A break planted there can never change what the code does."""
+    out, inside = set(), None
+    for i, line in enumerate(text.split("\n")):
+        if inside:
+            out.add(i)
+            if line.count(inside) % 2 == 1:
+                inside = None
+            continue
+        for q in ('"""', "'''", "`"):
+            if line.count(q) % 2 == 1:
+                out.add(i)
+                inside = q
+                break
+    return out
+
+
+def code_mask(line):
+    """The line with the inside of every quoted string and any trailing comment blanked out (same length), so a planted
+    break lands on code, never on text such as a message or a regex."""
+    out, q, esc = [], None, False
+    for ch in line:
+        if q:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == q:
+                q = None
+                out.append(ch)
+                continue
+            out.append(" ")
+        else:
+            if ch in "\"'`":
+                q = ch
+            out.append(ch)
+    m = "".join(out)
+    k = re.search(r"(^|\s)(#|//)", m)
+    return m[:k.start()] + " " * (len(m) - k.start()) if k else m
+
+
+def mutate(line, rx, rep):
+    """The line with one break planted at the first match of rx that lies in code (see code_mask); None when every
+    match is inside text."""
+    m = re.search(rx, code_mask(line))
+    if not m:
+        return None
+    return line[:m.start()] + re.sub(rx, rep, line[m.start():m.end()], count=1) + line[m.end():]
+
+
 FUNC_START = re.compile(r"^(\s*)(?:(?:export|public|private|protected|internal|static|async|override|suspend|pub)\s+)*"
                         r"(?:def|function|func|fn|fun|sub)\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)"
                         r"|^(\s*)(?:export\s+)?(?:const|let|var)\s+([A-Za-z_]\w*)\s*=\s*(?:async\s*)?(?:function\b|\([^)]*\)\s*=>)")
@@ -2904,7 +2955,7 @@ def aimed_lines(texts, probe_text, only=None):
     words = set(re.findall(r"[A-Za-z_]\w{2,}", probe_text))
     blocks = {c: func_blocks(t) for c, t in texts.items()}
     chosen = {c: {n for n in b if n in (set(only) if only else words)} for c, b in blocks.items()}
-    for c, t in ({} if only else texts).items():  # one step down: functions the named ones call
+    for c, t in texts.items():  # one step down: functions the named ones call
         lines = t.split("\n")
         calls = set()
         for n in chosen[c]:
@@ -2936,13 +2987,14 @@ def hollow_run(root, bwd, now, p, n=6):
     aim = aimed_lines(texts, p["cmd"] + "\n" + "\n".join(p.get("files", {}).values()), p.get("functions"))
     cands = []
     for c in covers:
+        prose = text_lines(texts[c])
         for i, line in enumerate(texts[c].split("\n")):
-            if SKIP_MUT.match(line) or len(line) > 300:
+            if SKIP_MUT.match(line) or len(line) > 300 or i in prose:
                 continue
             if aim and (c not in aim or i not in aim[c][0]):
                 continue
             for rx, rep in MUTATIONS:
-                if re.search(rx, line):
+                if mutate(line, rx, rep) is not None:
                     cands.append((c, i, rx, rep, line.strip()[:100]))
                     break
     random.Random(p["id"]).shuffle(cands)
@@ -2955,7 +3007,7 @@ def hollow_run(root, bwd, now, p, n=6):
             shutil.copytree(base, work, symlinks=True)
             fp = os.path.join(work, c)
             lines = open(fp, errors="replace").read().split("\n")
-            lines[i] = re.sub(rx, rep, lines[i], count=1)
+            lines[i] = mutate(lines[i], rx, rep)
             with open(fp, "w") as f:
                 f.write("\n".join(lines))
             o = run_probe(root, work, p)
@@ -3791,15 +3843,17 @@ def onboard_verify(root, bwd, budget=300):
     _obs_save(bwd, cache)
     # hollow check on the probes that passed, cheapest first, within what is left of the budget
     for row in sorted([r for r in rows if not r["problems"]], key=lambda r: r.get("ms", 0)):
-        if time.time() - t0 > budget * 0.8 or row["kind"] == "rule":
+        if time.time() - t0 > budget * 0.8:
             continue
         p = next(x for x in probes if x["id"] == row["probe"])
         try:
             h = hollow_run(root, bwd, now, p, 3)
-        except Exception:
+        except Exception as e:
+            tele_error("cmd-onboard", e, bwd)
             continue
         if h.get("tried"):
             row["hollow"] = [len(h["caught"]), len(h["tried"])]
+            row["missed"] = ["%s:%d  %s" % (f, n, src) for f, n, src, hit in h["tried"] if not hit]
     ok = [r for r in rows if not r["problems"]]
     bad = [r for r in rows if r["problems"]]
     for pa in project:
@@ -3942,7 +3996,7 @@ ul{{margin:6px 0 0;padding-left:18px}}
 # There is no field that can hold a path, a file or region name, code, a prompt, probe output or a finding: that is the
 # privacy guarantee, not scrubbing. Error messages and tracebacks stay in the local errors.log under a short id.
 
-BW_VERSION = "0.15.0"
+BW_VERSION = "0.15.1"
 TELE_HOST = os.environ.get("BW_TELEMETRY_HOST", "https://us.i.posthog.com")
 TELE_KEY = os.environ.get("BW_TELEMETRY_KEY", "phc_sQTYuZwYQkN3HKFiVo2d2XZ3VJB3YUjCEzYJQWPxZB7t")  # public project key (write-only); empty = never send
 TELE_SEND_EVERY = 20 * 3600
@@ -4456,7 +4510,9 @@ def cmd_onboard(args):
             if r["problems"]:
                 print("  not used: %s - %s" % (r["probe"], "; ".join(r["problems"])))
             elif r.get("hollow") and not r["hollow"][0]:
-                print("  may be hollow: %s - none of %d planted breaks changed its output" % (r["probe"], r["hollow"][1]))
+                print("  weak: %s - none of %d planted breaks changed its output. Breaks it missed:" % (r["probe"], r["hollow"][1]))
+                for m in r.get("missed") or []:
+                    print("      " + m)
         info = server_info(bwd)
         url = home_url(root, bwd)
         print("Onboarding page: %s" % (url.replace("home.html", "onboard.html") if url.startswith("http") else "file://" + os.path.join(bwd, "onboard.html")))
