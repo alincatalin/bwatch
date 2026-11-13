@@ -21,6 +21,7 @@ The overlay is the agent's structured output (.bw/understanding.json by default)
 questions with cited steps. bw checks every citation in it; anything it cannot check stays marked as the agent's.
 """
 import argparse
+import hashlib
 import html
 import json
 import os
@@ -131,7 +132,13 @@ def snapshots(root):
 def task_title(bwd, tid):
     t = load(os.path.join(bwd, "tasks", tid, "task.json"), {}) or {}
     p = (t.get("prompts") or [""])[0]
-    return re.sub(r"\s+", " ", p)[:140]
+    p = re.sub(r"\s+", " ", p).strip()
+    if p.startswith("<"):  # machine-wrapped prompts are not a title
+        return ""
+    # a prompt is the person's own words and may hold a key or token: never carry those into a page that can be shared
+    p = re.sub(r"\b[A-Za-z0-9_\-]*(?:[A-Za-z][0-9]|[0-9][A-Za-z]|_)[A-Za-z0-9_\-]{14,}\b", "[redacted]", p)
+    p = re.sub(r"(?i)\b(token|key|secret|password|passwd|bearer)\b\s*[:=]?\s*\S+", r"\1 [redacted]", p)
+    return p[:80]
 
 
 # ---------- code reading ----------
@@ -180,6 +187,30 @@ def is_copy(text, sym):
     return False
 
 
+def is_comment(text):
+    """The whole line is a comment or docstring text: it names the symbol but decides nothing."""
+    return bool(re.match(r'^\s*(//|/\*|\*|#(?!include|if|define|pragma)|--|<!--|"""|\'\'\')', text))
+
+
+def probe_key_of(root, pid, spec):
+    """The key bw files this probe's observations under: sha1 of its dir, command and the files beside probe.json."""
+    files = {}
+    d = os.path.join(root, ".bw", "probes", pid)
+    for dp, _, fns in os.walk(d):
+        for fn in fns:
+            full = os.path.join(dp, fn)
+            rel = os.path.relpath(full, d).replace(os.sep, "/")
+            if rel == "probe.json":
+                continue
+            try:
+                txt = open(full, encoding="utf-8").read()
+            except Exception:
+                continue
+            if len(txt) <= 64 * 1024:
+                files[rel] = txt
+    return hashlib.sha1(json.dumps({"dir": pid, "cmd": spec.get("cmd"), "files": files}, sort_keys=True).encode()).hexdigest()[:16]
+
+
 def symbols_for(p, root):
     """Names other code would use to reach this behavior: the main type of each covered file (its file name),
     the probe's functions (Type.member), and the UPPER_CASE rules declared in the covered files."""
@@ -203,7 +234,7 @@ def rules_in(root, covers):
         ls = read_lines(root, c) or []
         for i, ln in enumerate(ls):
             m = CONST_RX.match(ln)
-            if m and not ln.strip().startswith(("//", "#", "*")):
+            if m and not ln.strip().startswith(("//", "#", "*")) and not re.search(r",\s*\w+\s*=", ln) and not ln.rstrip().endswith((",", "(")):
                 out.append({"name": m.group(1), "value": m.group(2).strip().rstrip(","), "file": c, "line": i + 1,
                             "text": ln.strip()[:200]})
     return out
@@ -270,12 +301,21 @@ def build(root, overlay_path=None):
     for pid, p in probes.items():
         row = rows.get(pid, {})
         now_out = row.get("after", "")
+        src = "onboard" if row else None
+        if not row:  # never onboarded: use the newest run bw kept for this exact probe
+            mine = by_tree.get(probe_key_of(root, pid, p), [])
+            timed = sorted(mine, key=lambda tv: ((snaps.get(tv[0]) or head_snap(tv[0])).get("at") or 0))
+            if timed:
+                v = timed[-1][1]
+                now_out = v.get("out", "")
+                row = {"stable": v.get("stable"), "ms": v.get("ms")}
+                src = "task"
         cases, fields = parse_cases(now_out)
         b = {"id": pid, "claim": p.get("finding") or p.get("scenario", ""), "scenario": p.get("scenario", ""),
              "area": p.get("area") or row.get("area", ""), "kind": p.get("kind", "behavior"), "cmd": p.get("cmd", ""),
              "covers": p.get("covers", []), "functions": p.get("functions", []), "out": now_out,
              "cases": cases, "fields": fields, "exit": exit_of(now_out),
-             "ran": {"runs": 2 if row else 0, "stable": row.get("stable"), "ms": row.get("ms"), "problems": row.get("problems", [])},
+             "source": src, "ran": {"runs": 2 if src == "onboard" else 1 if src else 0, "stable": row.get("stable"), "ms": row.get("ms"), "problems": row.get("problems", [])},
              "broke": ({"caught": row["hollow"][0], "tried": row["hollow"][1], "missed": row.get("missed") or []}
                        if row.get("hollow") else None)}
         # entry: where a user's way in starts
@@ -341,6 +381,18 @@ def build(root, overlay_path=None):
                           for d in decisions if (d.get("probe") or "").rstrip("/").endswith("/" + pid) or d.get("id", "").endswith("-f-" + pid)]
         b["belief"] = next((x for x in beliefs if x.get("probe") == pid or x.get("id") == pid), None)
         b["rules"] = rules_in(root, b["covers"])
+        if len(b["rules"]) > 12:  # a big shared file: keep only the constants this probe's own files or wording name
+            ptxt = " ".join([p.get("finding", ""), p.get("scenario", ""), p.get("cmd", "")])
+            pd = os.path.join(root, ".bw", "probes", pid)
+            for dp, _, fns in os.walk(pd):
+                for fn in fns:
+                    try:
+                        ptxt += "\n" + open(os.path.join(dp, fn), encoding="utf-8").read()
+                    except Exception:
+                        pass
+            keep = [r for r in b["rules"] if re.search(r"\b%s\b" % re.escape(r["name"]), ptxt)]
+            b["rules_more"] = len(b["rules"]) - len(keep)
+            b["rules"] = keep
         # readers: who names this behavior's types, functions and rules, outside the covered files
         syms = symbols_for(p, root) + [{"name": r["name"], "rx": r"\b%s\b" % re.escape(r["name"]), "kind": "rule"} for r in b["rules"]]
         readers = []
@@ -348,7 +400,7 @@ def build(root, overlay_path=None):
         for s in syms:
             for f, ln, txt in grep_lines(root, others, s["rx"]):
                 readers.append({"file": f, "line": ln, "text": txt, "sym": s["name"], "symkind": s["kind"],
-                                "use": "copy" if is_copy(txt, s["name"].split(".")[-1]) else "logic"})
+                                "use": "comment" if is_comment(txt) else "copy" if is_copy(txt, s["name"].split(".")[-1]) else "logic"})
         test_hits = []
         for s in syms:
             test_hits += [{"file": f, "line": ln, "text": t, "sym": s["name"]} for f, ln, t in grep_lines(root, tests, s["rx"])]
@@ -481,6 +533,7 @@ def build(root, overlay_path=None):
              "scan": {k: scan.get(k) for k in ("files", "code_files", "languages", "commits_12m", "tests", "test_names", "test_commands", "docs")},
              "areas": areas, "behaviors": behaviors, "links": links, "shares": shares, "capabilities": caps,
              "questions": questions, "boundaries": ov.get("boundaries", []), "unshown": unshown, "snapshots": snaps_list,
+             "equivalents": [e for e in ov.get("equivalents", []) if isinstance(e, dict) and e.get("a") and e.get("b")],
              "decisions": len(decisions), "overlay": os.path.basename(ov_path) if ov else None}
     return model
 
@@ -495,9 +548,11 @@ def fail_why(out):
 
 
 def render(model, out_path):
+    """model: one model, or a list of models (one per repository) shown behind a repository switcher."""
+    models = model if isinstance(model, list) else [model]
     tpl = open(os.path.join(HERE, "atlas_template.html")).read()
-    data = json.dumps(model, separators=(",", ":")).replace("</", "<\\/")
-    page = tpl.replace("/*__MODEL__*/null", data).replace("__REPO__", html.escape(model["repo"]))
+    data = json.dumps(models, separators=(",", ":")).replace("</", "<\\/")
+    page = tpl.replace("/*__MODEL__*/null", data)
     if not page.lstrip().lower().startswith("<!doctype"):
         page = '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">\n' + page
     with open(out_path, "w") as f:
@@ -510,13 +565,14 @@ def main():
     ap.add_argument("--overlay")
     ap.add_argument("--out")
     ap.add_argument("--json")
+    ap.add_argument("--with", dest="more", nargs="*", default=[], help="model JSON files of other repositories to show in the same page")
     a = ap.parse_args()
     m = build(a.root, a.overlay)
     if a.json:
         with open(a.json, "w") as f:
             json.dump(m, f, indent=1)
     if a.out:
-        render(m, a.out)
+        render([m] + [json.load(open(f)) for f in a.more], a.out)
         print("atlas: %d behaviors, %d links, %d snapshots -> %s" % (len(m["behaviors"]), len(m["links"]), len(m["snapshots"]), a.out))
     if not a.json and not a.out:
         json.dump(m, sys.stdout)
