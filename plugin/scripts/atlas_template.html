@@ -313,6 +313,7 @@ const store = { get(k) { try { return JSON.parse(localStorage.getItem(k) || "nul
 let M, B, headTime, SEEN, trail = [], view = "home";
 function useRepo(m) {
   if (M === m) return;
+  grp = null; flt = "all"; bq = "";
   M = m; B = Object.fromEntries(M.behaviors.map(b => [b.id, b])); trail = [];
   const h = M.behaviors.flatMap(b => b.history).find(h => h.label === "last commit"); headTime = h ? h.at : null;
   SEEN = store.get("bw-atlas-seen:" + slug(M)) || {at: null, b: {}};
@@ -333,9 +334,13 @@ function markSeen(b) { SEEN.b[b.id] = {at: Math.floor(Date.now() / 1000), cases:
 
 // two probes, same situation: do they agree?
 function words(k) { return k.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase().split(/[^a-z]+/).filter(w => w.length > 3); }
+// The person's own ruling on a pair of fields ("same thing" or "different things") outranks the agent's and the name guess.
+const pairKey = (a, fa, b, fb) => [a + "." + fa, b + "." + fb].sort().join(" = ");
+function verdicts() { return store.get("bw-atlas-eq:" + slug(M)) || {}; }
+function setVerdict(key, v) { const all = verdicts(); if (v) all[key] = v; else delete all[key]; store.set("bw-atlas-eq:" + slug(M), all); M._dis = null; M._pack = null; route(); }
 function disagreements() {
   if (M._dis) return M._dis;
-  const out = [], eq = M.equivalents || [];
+  const out = [], eq = M.equivalents || [], vd = verdicts(); M._dismissed = 0;
   for (let i = 0; i < M.behaviors.length; i++) for (let j = i + 1; j < M.behaviors.length; j++) {
     const a = M.behaviors[i], b = M.behaviors[j];
     for (const ca of a.cases) { if (ca.unparsed) continue; const cb = b.cases.find(x => x.label === ca.label && !x.unparsed); if (!cb) continue;
@@ -343,7 +348,9 @@ function disagreements() {
         if (String(va) === String(vb)) continue;
         const decl = eq.find(e => (e.a === a.id + "." + fa && e.b === b.id + "." + fb) || (e.b === a.id + "." + fa && e.a === b.id + "." + fb));
         const alike = fa !== "→" && fb !== "→" && (fa === fb || words(fa).some(w => words(fb).includes(w)));   // free-text results are not comparable
-        if (decl || alike) out.push({a: a.id, b: b.id, label: ca.label, fa, va, fb, vb, declared: !!decl, says: decl && decl.says});
+        const key = pairKey(a.id, fa, b.id, fb), mine = vd[key];
+        if (mine === "diff") { M._dismissed++; continue; }
+        if (mine === "same" || decl || alike) out.push({a: a.id, b: b.id, label: ca.label, fa, va, fb, vb, key, declared: mine === "same" || !!decl, by: mine === "same" ? "you" : decl ? "agent" : "names", says: decl && decl.says});
       } }
   }
   return M._dis = out;
@@ -369,6 +376,16 @@ function sameSituation(b) {
     for (const c of b.cases) { if (c.unparsed) continue; const oc = o.cases.find(x => x.label === c.label && !x.unparsed); if (oc) out.push({other:o, label:c.label, mine:c.fields, theirs:oc.fields}); } }
   return out;
 }
+const domain = v => /^(true|false)$/.test(v) ? "bool" : /^-?\d+(\.\d+)?$/.test(v) ? "num" : /^[A-Z][A-Z0-9_]+$/.test(v) ? "enum" : "text";
+function candidates(id, label) {   // pairs nobody has ruled on that could be the same thing: same kind of value, different value
+  const b = B[id], c = b.cases.find(x => x.label === label), out = [], vd = verdicts(), flagged = new Set(disFor(id, label).map(d => d.key));
+  for (const s of sameSituation(b).filter(s => s.label === label)) for (const [fa, va] of Object.entries(c.fields)) for (const [fb, vb] of Object.entries(s.theirs)) {
+    const key = pairKey(id, fa, s.other.id, fb);
+    if (fa === "→" || fb === "→" || String(va) === String(vb) || flagged.has(key) || vd[key] || domain(String(va)) !== domain(String(vb)) || domain(String(va)) === "text" || domain(String(va)) === "num") continue;
+    out.push({key, fa, va, fb, vb, other: s.other.id}); }
+  return out;
+}
+const ruleBtns = d => `<span style="display:inline-flex;gap:4px;flex-wrap:wrap;margin-top:4px"><button class="btn" data-verdict="same" data-key="${esc(d.key)}">Same thing</button><button class="btn" data-verdict="diff" data-key="${esc(d.key)}">Different things</button></span>`;
 function connections(b) {
   const out = [];
   for (const l of M.links) { if (l.a !== b.id && l.b !== b.id) continue;
@@ -404,6 +421,9 @@ function renderShell() {
 document.addEventListener("click", e => {
   const rp = e.target.closest("[data-repo]"); if (rp) { const m = MODELS.find(x => slug(x) === rp.dataset.repo); go("home", m); return; }
   const g = e.target.closest("[data-go]"); if (g) { e.preventDefault(); $("#side").classList.remove("open"); go(g.dataset.go); return; }
+  const vb = e.target.closest("[data-verdict]"); if (vb) { setVerdict(vb.dataset.key, vb.dataset.verdict); return; }
+  if (e.target.id === "clearv") { store.set("bw-atlas-eq:" + slug(M), {}); M._dis = null; route(); return; }
+  const mo = e.target.closest("[data-more]"); if (mo) { mo.parentElement.querySelectorAll(".bi[hidden]").forEach(x => x.hidden = false); mo.remove(); return; }
   const r = e.target.closest("[data-ref]"); if (r) { openRef(JSON.parse(r.dataset.ref)); return; }
   const c = e.target.closest("[data-case]"); if (c) { openCase(c.dataset.b, c.dataset.case); return; }
   const k = e.target.closest("[data-ev]"); if (k) { openEv(k.dataset.b, k.dataset.ev); return; }
@@ -433,8 +453,10 @@ function openCase(id, label) {
   <div><div class="lbl">The line the probe printed</div><pre>${esc(c.raw)}</pre></div>
   <div><div class="lbl">How it was run</div><pre>$ ${esc(b.cmd)}</pre><p class="muted" style="margin-top:6px;font-size:13px">${b.ran.runs === 2 ? "Ran twice on a clean copy of the code; both runs printed the same." : "bw ran it while an agent worked on a task and kept the output."} That shows this input gives this output on this code. It does not show other inputs.</p></div>
   ${others.map(o => `<div><div class="lbl">Same situation in ${esc(o.other.id)}</div><pre>${esc(o.other.cases.find(x => x.label === label).raw)}</pre></div>`).join("")}
-  ${dis.map(d => `<div class="row">${ev(d.declared ? "ne" : "maybe")}<div><code>${esc(d.fa)}=${esc(d.va)}</code> here, <code>${esc(d.fb)}=${esc(d.vb)}</code> in ${esc(d.b)}.</div><div class="sub">${d.declared ? esc(d.says || "The agent declared these two fields mean the same thing.") + " bw compared the two runs." : "The field names are alike. Nobody has said they mean the same thing, so this may be fine."}</div></div>`).join("")}`);
+  ${dis.map(d => `<div class="row">${ev(d.declared ? "ne" : "maybe")}<div><code>${esc(d.fa)}=${esc(d.va)}</code> here, <code>${esc(d.fb)}=${esc(d.vb)}</code> in ${esc(d.b)}.</div><div class="sub">${whoSays(d)}<br>${d.by === "you" ? `<button class="btn" data-verdict="" data-key="${esc(d.key)}" style="margin-top:4px">Undo my ruling</button>` : ruleBtns(d)}</div></div>`).join("")}
+  ${candidates(id, label).slice(0, 4).map(d => `<div class="row">${ev("gap", "not ruled")}<div><code>${esc(d.fa)}=${esc(d.va)}</code> here, <code>${esc(d.fb)}=${esc(d.vb)}</code> in ${esc(d.other)}.</div><div class="sub">Different names, same kind of value. If they describe the same thing, this is a contradiction the atlas cannot see by itself.<br>${ruleBtns(d)}</div></div>`).join("")}`);
 }
+const whoSays = d => d.by === "you" ? "You said these two fields mean the same thing. bw compared the two runs; it does not know which is right." : d.by === "agent" ? esc(d.says || "The agent declared these two fields mean the same thing.") + " bw compared the two runs; it does not know which is right." : "The field names are alike. Nobody has said they mean the same thing, so this may be fine.";
 function openEv(id, kind) {
   const b = B[id];
   if (kind === "broke") drawer("Break test", b.broke ? `${ev("broke", b.broke.caught + " of " + b.broke.tried + " caught")}<p>bw changed one small thing at a time in the code this probe covers (a comparison, a boolean, a constant) and re-ran the probe. ${b.broke.caught} of ${b.broke.tried} changes made its output differ.</p>${b.broke.missed.length ? `<div class="lbl">Breaks it did not notice</div><pre>${esc(b.broke.missed.join("\n"))}</pre>` : ""}<p class="muted" style="font-size:13px">A probe that notices planted breaks is more likely to notice a real one in the same lines. It says nothing about code it does not cover.</p>`
@@ -458,7 +480,7 @@ function viewHome() {
   const gaps = M.boundaries.length + M.unshown.length;
   let h = `<div class="sheet"><div class="head"><div class="lbl">${esc(M.repo)} · overview</div>
    <h1>${plural(all.length, "behavior")} seen running${M.areas.length ? `, in ${covered.size} of ${M.areas.length} areas of the code` : ""}.</h1>
-   <p class="lede">What this system does, as probes showed it, lines bw read, and an AI agent's words, each marked. ${SEEN.at ? `You first looked on this device ${esc(when(SEEN.at))}.` : "This is your first visit on this device, so “changed” means since the last commit."}</p></div>
+   <p class="lede">What this system does, as probes showed it, lines bw read, and an AI agent's words, each marked. ${M.prev_build ? `bw last recorded a build ${esc(when(M.prev_build.at))}; ${Object.keys(M.prev_build.moved).length ? plural(Object.keys(M.prev_build.moved).length, "behavior") + " moved since." : "nothing moved since."}` : "No earlier build is recorded, so “changed” means between the code snapshots bw kept."}</p></div>
    <div class="tiles">
     <button class="tile" data-go="changes"><span class="n">${ch}<small>Δ</small></span><span class="d">${ch === 1 ? "value" : "values"} changed between snapshots</span></button>
     <button class="tile" data-go="edges"><span class="n">${dis.filter(d => d.declared).length + all.filter(b => b.claim_stale).length}<small>≠</small></span><span class="d">contradictions: stale summaries and probes that disagree</span></button>
@@ -476,7 +498,14 @@ function viewHome() {
 const tally = steps => { const n = k => steps.filter(s => s.kind === k).length; return (n("ran") ? ev("ran", n("ran") + " ran") : "") + (n("read") ? ev("read", n("read") + " read") : "") + (n("says") ? ev("says", n("says") + " unchecked") : "") + (n("gap") ? ev("gap", n("gap") + " not shown") : ""); };
 
 // ---------- behaviors (the index, built for hundreds) ----------
-let flt = "all", bq = "";
+let flt = "all", bq = "", grp = null;
+const GROUPS = {
+  cap: ["What it is for", b => { const c = capOf(b.id); return c && !c.computed ? c.name : "Not grouped by an agent"; }, "an AI agent named these groups"],
+  code: ["Code it covers", b => { const f = b.covers[0]; if (!f) return "No file stated"; const multi = new Set(M.behaviors.map(x => x.covers[0])).size > 1; return multi ? f.split("/").slice(-2).join("/") : "…/" + base(f) + (b.functions && b.functions[0] ? " · " + b.functions[0] + "()" : ""); }, "from the files and functions each probe says it covers"],
+  state: ["What needs a look", b => { const f = flags(b); return f.stale || f.differs || f.dis ? "1 · Contradiction" : f.unseen ? "2 · Changed since you looked" : f.chg ? "3 · Changed between snapshots" : f.maybe ? "4 · May disagree" : f.nb ? "5 · Never break-tested" : "6 · Quiet"; }, "computed from the evidence"],
+  way: ["Way in", b => b.entry && b.entry.file ? base(b.entry.file) : b.entry && b.entry.text ? short(b.entry.text.split(/[(:,]/)[0].trim(), 40) : "No way in stated", "the entry point each probe states"]
+};
+const defaultGroup = () => M.capabilities.some(c => !c.computed) ? "cap" : "state";
 const FILTERS = [["all","All",() => true],["look","Look first",b => attention(b) >= 4],["chg","Δ changed",b => flags(b).chg],["ne","≠ contradiction",b => { const f = flags(b); return f.stale || f.differs || f.dis || f.maybe; }],["nb","⊘ not break-tested",b => flags(b).nb]];
 function viewBehaviors() {
   const q = bq.trim().toLowerCase();
@@ -485,11 +514,13 @@ function viewBehaviors() {
   let h = `<div class="sheet"><div class="head"><div class="lbl">${esc(M.repo)} · behaviors</div><h1>Every behavior a probe has run</h1></div>
    <div class="tools"><input class="search" id="bq" type="search" placeholder="Filter by words, situations or rule names" aria-label="Filter behaviors" value="${esc(bq)}">
    <div class="chips">${FILTERS.map(([k, w, fn]) => `<button class="chip" data-flt="${k}" aria-pressed="${flt === k}">${w}<b>${M.behaviors.filter(fn).length}</b></button>`).join("")}</div></div>`;
-  let shown = 0;
-  for (const c of M.capabilities) {
-    const items = c.behaviors.map(id => B[id]).filter(Boolean).filter(hit).filter(f).sort((a, b) => attention(b) - attention(a)); if (!items.length) continue; shown += items.length;
-    h += `<details class="grp" open><summary>${esc(c.computed ? "Not grouped by an agent yet" : c.name)} <span class="faint" style="font-weight:400;font-size:12.5px">${items.length}</span>${c.computed ? "" : ` <span class="faint" style="font-weight:400;font-size:12.5px">${ev("says", "grouping")}</span>`}</summary><div class="card blist">${items.map(bRow).join("")}</div></details>`;
-  }
+  const g = GROUPS[grp || defaultGroup()], gk = grp || defaultGroup(), buckets = {};
+  const list = M.behaviors.filter(hit).filter(f); for (const b of list) (buckets[g[1](b)] = buckets[g[1](b)] || []).push(b);
+  const names = Object.keys(buckets).sort((x, y) => gk === "state" ? x.localeCompare(y) : buckets[y].reduce((n, b) => n + attention(b), 0) - buckets[x].reduce((n, b) => n + attention(b), 0) || x.localeCompare(y));
+  h += `<div class="tools"><span class="lbl">Group by</span><div class="chips">${Object.entries(GROUPS).map(([k, v]) => `<button class="chip" data-grp="${k}" aria-pressed="${gk === k}">${v[0]}</button>`).join("")}</div><span class="tnote">${gk === "cap" ? ev("says", "") + " " : ""}${esc(g[2])} · ${plural(list.length, "behavior")} in ${plural(names.length, "group")}</span></div>`;
+  let shown = list.length; const big = list.length > 40;
+  names.forEach((n, i) => { const items = buckets[n].sort((a, b) => attention(b) - attention(a)), hot = items.filter(b => attention(b) >= 4).length;
+    h += `<details class="grp" ${!big || i === 0 || q ? "open" : ""}><summary>${esc(gk === "state" ? n.slice(4) : n)} <span class="faint" style="font-weight:400;font-size:12.5px">${items.length}</span>${hot && gk !== "state" ? ` ${ev("ne", hot + " to look at")}` : ""}</summary><div class="card blist">${items.map((b, j) => j < 25 ? bRow(b) : bRow(b).replace('<button class="bi"', '<button class="bi" hidden')).join("")}${items.length > 25 ? `<button class="bi" data-more="1"><span class="t muted">Show all ${items.length}</span></button>` : ""}</div></details>`; });
   if (!shown) h += `<div class="row">${ev("gap")}<div>No behavior matches.</div></div>`;
   const bare = M.areas.filter(a => !a.behaviors.length);
   if (bare.length) h += `<p class="tnote">${ev("gap", "no probe")} ${bare.length} areas of the code have no behavior run yet: ${bare.map(a => esc(a.name)).join(", ")}.</p>`;
@@ -507,6 +538,12 @@ function viewChanges() {
   h += `<section class="sec"><header><h2>Since you last looked</h2><span class="q">${SEEN.at ? "compared with what each behavior printed when you last opened it on this device" : "nothing to compare yet"}</span></header><div class="rows">`;
   h += mine.map(({b, s}) => `<div class="row">${ev("chg")}<div><button class="go" data-go="b-${esc(b.id)}">${esc(b.id)}</button>: ${s.cells.map(cell).join("; ")}</div><div class="sub">you last opened it ${esc(when(s.at))}</div></div>`).join("") ||
     `<div class="row">${ev("you")}<div>${Object.keys(SEEN.b).length ? `Nothing changed in the ${plural(Object.keys(SEEN.b).length, "behavior")} you have opened.` : "You have not opened a behavior on this device yet. Open one and the atlas remembers what it printed, so next time it can tell you what moved."}</div><div class="sub">Kept in this browser only. bw itself does not record who looked at what.</div></div>`;
+  const pb = M.prev_build;
+  h += `</div></section><section class="sec"><header><h2>Since the atlas was last built</h2><span class="q">${pb ? `recorded by bw on ${esc(when(pb.at))} at <code>${esc(pb.head)}</code>; the same for everyone on this repository` : "bw's own baseline, independent of this browser"}</span></header><div class="rows">`;
+  if (!pb) h += `<div class="row">${ev("gap")}<div>No earlier build is on record, so there is nothing to compare with yet.</div><div class="sub">Build with <code>atlas.py --record</code> and the next build shows what moved since.</div></div>`;
+  else { const mv = Object.entries(pb.moved);
+    h += mv.map(([id, d]) => `<div class="row">${ev(d.new ? "ran" : "chg", d.new ? "new" : null)}<div><button class="go" data-go="b-${esc(id)}">${esc(id)}</button>${d.new ? " did not exist at the last build." : ": " + [...d.cells, ...d.added.map(l => ({label: l, added: 1})), ...d.removed.map(l => ({label: l, removed: 1}))].map(cell).join("; ")}</div></div>`).join("") + pb.gone.map(id => `<div class="row">${ev("gap", "gone")}<div><code>${esc(id)}</code> was in the last build and has no probe now.</div></div>`).join("") ||
+      `<div class="row">${ev("ran")}<div>Every behavior prints what it printed at the last build.</div></div>`; }
   h += `</div></section><section class="sec"><header><h2>Between the snapshots bw kept</h2><span class="q">newest first${headTime ? `; last commit ${esc(when(headTime))}` : ""}</span></header><div class="rows">`;
   for (const {b, c} of ch) h += `<div class="row">${ev("chg")}<div><button class="go" data-go="b-${esc(b.id)}">${esc(b.id)}</button>: ${[...c.cells, ...c.added.map(l => ({label: l.label || l, added: 1})), ...c.removed.map(l => ({label: l.label || l, removed: 1}))].map(cell).join("; ")}</div><div class="sub">between ${esc(when(c.frm))} and ${esc(when(c.to))}${c.title ? `, during the task “${esc(short(c.title, 90))}”` : ""}</div></div>`;
   for (const b of stale) h += `<div class="row">${ev("ne", "stale summary")}<div><button class="go" data-go="b-${esc(b.id)}">${esc(b.id)}</button>: its one-line summary was written before a change and still describes the old output.</div><div class="sub">${ev("says", "")} “${esc(short(b.claim, 120))}”</div></div>`;
@@ -527,11 +564,15 @@ function viewEdges() {
   let h = `<div class="sheet"><div class="head"><div class="lbl">${esc(M.repo)} · edges of knowledge</div><h1>Where the evidence stops, or argues with itself</h1><p class="lede">Read this before trusting the rest. Nothing here is hidden behind a score.</p></div>`;
   h += `<section class="sec"><header><h2>Contradictions</h2></header><div class="rows">`;
   h += stale.map(b => `<div class="row">${ev("ne", "stale summary")}<div><button class="go" data-go="b-${esc(b.id)}">${esc(b.id)}</button>: the AI's summary describes output the probe no longer prints.</div></div>`).join("");
-  h += dis.map(d => `<div class="row">${ev(d.declared ? "ne" : "maybe")}<div>“${esc(d.label)}”: <button class="go" data-go="b-${esc(d.a)}">${esc(d.a)}</button> prints <code>${esc(d.fa)}=${esc(d.va)}</code>, <button class="go" data-go="b-${esc(d.b)}">${esc(d.b)}</button> prints <code>${esc(d.fb)}=${esc(d.vb)}</code>.</div><div class="sub">${d.declared ? esc(d.says || "Declared as the same thing.") + " bw compared the two runs; it does not know which is right." : "Similar field names, different values. Nobody has said these mean the same thing."}</div></div>`).join("");
+  if (dis.length > 30) h += `<p class="tnote">Showing the first 30 of ${dis.length}, confirmed ones first.</p>`;
+  h += [...dis].sort((x, y) => y.declared - x.declared).slice(0, 30).map(d => `<div class="row">${ev(d.declared ? "ne" : "maybe")}<div>“${esc(d.label)}”: <button class="go" data-go="b-${esc(d.a)}">${esc(d.a)}</button> prints <code>${esc(d.fa)}=${esc(d.va)}</code>, <button class="go" data-go="b-${esc(d.b)}">${esc(d.b)}</button> prints <code>${esc(d.fb)}=${esc(d.vb)}</code>.</div><div class="sub">${whoSays(d)}<br>${d.by === "you" ? `<button class="btn" data-verdict="" data-key="${esc(d.key)}" style="margin-top:4px">Undo my ruling</button>` : ruleBtns(d)}</div></div>`).join("");
+  if (M._dismissed) h += `<div class="row">${ev("you")}<div>You ruled ${plural(M._dismissed, "pair")} “different things”, so ${M._dismissed === 1 ? "it is" : "they are"} not listed.</div><div class="sub"><button class="btn" id="clearv">Clear my rulings</button></div></div>`;
   if (!stale.length && !dis.length) h += `<div class="row">${ev("ran")}<div>No two probes run the same situation with different answers, and no summary is older than its output.</div><div class="sub">Probes only contradict each other when they share a situation label, so this is a weak “all clear”.</div></div>`;
   h += `</div></section><section class="sec"><header><h2>Limits</h2></header><div class="edge">
     <div><div class="lbl">${EV.gap.g} Never shown</div><ul>${list([...M.boundaries.map(x => `<li>${esc(x.say)}</li>`), ...M.unshown.map(x => `<li>${esc(short(x, 170))} <span class="faint">(agent)</span></li>`)], 12) || "<li class='faint'>The agent listed nothing. That is not the same as nothing being missing.</li>"}</ul></div>
     <div><div class="lbl">${EV.nb.g} Ran, never break-tested</div>${nb.length === all.length && all.length > 3 ? `<p style="font-size:13px">None of the ${all.length} behaviors.${all.every(b => b.source !== "onboard") ? " This repository has not been through /bw:onboard, which is where bw plants breaks." : ""}</p>` : `<ul>${list(nb.map(b => `<li><button class="go" data-go="b-${esc(b.id)}">${esc(b.id)}</button></li>`), 10) || "<li>none</li>"}</ul>`}<p class="faint" style="font-size:12.5px">Repeatable output, unknown sensitivity to a real break.</p></div>
+    ${(() => { const seen = {}, items = []; for (const b of all) for (const d of b.declared || []) for (const u of d.unseen) { const k = d.type + "." + u; if (!seen[k]) { seen[k] = 1; items.push(`<li><code>${esc(d.type)}.${esc(u)}</code> ${refBtn(d.file, d.line, d.text)} <button class="go" data-go="b-${esc(b.id)}">${esc(b.id)}</button></li>`); } }
+      return items.length ? `<div><div class="lbl">${EV.gap.g} Declared in code, never produced by a run</div><ul>${list(items, 10)}</ul><p class="faint" style="font-size:12.5px">The code names these states. No probe has shown what leads to them.</p></div>` : ""; })()}
     <div><div class="lbl">${EV.says.g} AI statements nothing checks</div><ul>${list(unchecked.map(({b, a}) => `<li>${esc(a.says)} <button class="go" data-go="b-${esc(b.id)}">${esc(b.id)}</button></li>`), 8)}${noStmts.length ? `<li class="faint">${plural(noStmts.length, "behavior")} ${noStmts.length === 1 ? "has" : "have"} only a one-line summary, with no statement tied to a row.</li>` : ""}</ul></div>
     ${M.areas.length ? `<div><div class="lbl">Size and activity, not importance</div><div class="size">${M.areas.map(a => `<div class="sz"><span title="${esc(a.paths.join(", "))}">${esc(a.name)}</span><span class="bar"><span class="${a.behaviors.length ? "cov" : ""}" style="width:${(100 * a.files / maxFiles).toFixed(1)}%"></span></span><span class="n">${a.files} files</span></div>`).join("")}</div><p class="faint" style="font-size:12.5px">Green: areas with at least one behavior run.${M.scan.commits_12m != null ? ` ${M.scan.commits_12m} commits in 12 months, ${M.scan.tests} test files (found, not run by bw).` : ""}</p></div>` : `<div><div class="lbl">Code areas</div><p style="font-size:13px">bw has not scanned this repository's areas, so the atlas cannot say which parts of the code have no behavior run.</p></div>`}
   </div></section></div>`;
@@ -590,7 +631,7 @@ function viewBehavior(id) {
     <div class="rows">${(st.notes || []).map(n => `<div class="row">${n.ok ? ev("read") : ev("says")}<div>${esc(n.says)}</div><div class="sub">${n.ok ? refBtn(n.file, n.line, n.text) + " <code>" + esc(n.text) + "</code>" : "quote not found"}</div></div>`).join("")}</div>
     <p class="tnote">Triangles mark values a probe actually ran. Every other value is worked out from the ladder line in the code and has not been run.</p></div></section>`; }
   const oc = outcomes(b);
-  for (const o of oc) h += `<section class="sec"><header><h2>Outcomes seen${o.field === "→" ? "" : ` for <code>${esc(o.field)}</code>`}</h2><span class="q">which situations led to which result; bw has not seen how one turns into another</span></header><div class="card lanes">${o.groups.map(g => `<div class="lane"><span class="val">${esc(g.v)}</span><span class="sits">${g.cases.map(c => { const x = chgCell(c.label, o.field); return `<button class="sitc" data-case="${esc(c.label)}" data-b="${esc(id)}">${x ? `<span class="ev chg" style="padding:0 5px;line-height:17px" title="was ${esc(x.before)}"><i>Δ</i></span> ` : ""}${esc(c.label)}</button>`; }).join("")}</span></div>`).join("")}</div></section>`;
+  for (const o of oc) h += `<section class="sec"><header><h2>Outcomes seen${o.field === "→" ? "" : ` for <code>${esc(o.field)}</code>`}</h2><span class="q">which situations led to which result; bw has not seen how one turns into another</span></header><div class="card lanes">${o.groups.map(g => `<div class="lane"><span class="val">${esc(g.v)}</span><span class="sits">${g.cases.map(c => { const x = chgCell(c.label, o.field); return `<button class="sitc" data-case="${esc(c.label)}" data-b="${esc(id)}">${x ? `<span class="ev chg" style="padding:0 5px;line-height:17px" title="was ${esc(x.before)}"><i>Δ</i></span> ` : ""}${esc(c.label)}</button>`; }).join("")}</span></div>`).join("")}${(b.declared || []).filter(d => d.field === o.field).map(d => d.unseen.map(u => `<div class="lane" style="border-top:1px dashed var(--gap)"><span class="val" style="color:var(--gap)">${esc(u)}</span><span class="sits">${ev("gap", "no run produced this")} <span class="muted" style="font-size:12.5px">declared in ${refBtn(d.file, d.line, d.text, d.type + " · " + base(d.file) + ":" + d.line)}</span></span></div>`).join("")).join("")}</div></section>`;
   // cases
   const parsed = b.cases.filter(c => !c.unparsed), rawOnly = b.cases.filter(c => c.unparsed);
   h += `<section class="sec"><header><h2>What it did, situation by situation</h2>${b.exit === 0 ? ev("ran") : ev("gap")}<span class="q">${plural(b.cases.length, "line")} printed by <code>${esc(b.cmd)}</code></span></header>`;
@@ -785,6 +826,7 @@ function wire(b) {
     el.addEventListener("mouseleave", () => { const t = row(); t && t.classList.remove("hl"); });
     el.addEventListener("click", () => { const t = row(); if (t) { t.scrollIntoView({block:"center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"}); t.classList.add("hl"); setTimeout(() => t.classList.remove("hl"), 1600); } });
   });
+  document.querySelectorAll("[data-grp]").forEach(el => el.onclick = () => { grp = el.dataset.grp; $("#main").innerHTML = trailBar() + viewBehaviors(); wire(); });
   document.querySelectorAll("[data-flt]").forEach(el => el.onclick = () => { flt = el.dataset.flt; $("#main").innerHTML = trailBar() + viewBehaviors(); wire(); });
   const bqi = $("#bq"); if (bqi) bqi.oninput = () => { bq = bqi.value; const pos = bqi.selectionStart; $("#main").innerHTML = trailBar() + viewBehaviors(); wire(); const n = $("#bq"); n.focus(); n.setSelectionRange(pos, pos); };
   document.querySelectorAll("[data-askabout]").forEach(el => el.onclick = () => { ask = {...ask, q: `What does ${el.dataset.askabout} show, what depends on it, and what is not shown?`, ans: null, err: ""}; go("ask"); });

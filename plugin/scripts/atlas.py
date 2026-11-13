@@ -240,6 +240,52 @@ def rules_in(root, covers):
     return out
 
 
+ENUM_HEAD = re.compile(r"^\s*(?:(?:export|public|private|internal|protected|pub|sealed|data|const|indirect)\s+)*"
+                       r"(?:enum\s+class|enum|class)\s+([A-Za-z_]\w*)(.*)$")
+ENUM_MEMBER = re.compile(r"^\s*(?:case\s+)?([A-Za-z_]\w*)\s*(?:\(|,|;|=|\{|$)")
+
+
+def declared_states(root, files, seen):
+    """A type declared in code whose members include the values a probe printed. Members no run produced are unknowns.
+    seen: the distinct identifier-like values of one output field. Returns the best matching declaration or None."""
+    seen = {v for v in seen if re.match(r"^[A-Za-z_]\w*$", v)}
+    if len(seen) < 2:
+        return None
+    best = None
+    for f in files:
+        ls = read_lines(root, f)
+        if not ls:
+            continue
+        text = "\n".join(ls)
+        if sum(1 for v in seen if re.search(r"\b%s\b" % re.escape(v), text)) < 2:
+            continue
+        for i, ln in enumerate(ls):
+            m = ENUM_HEAD.match(ln)
+            if not m or not ("enum" in ln or re.search(r"\((?:\w+\.)?(?:Str|Int)?Enum\)", ln)):
+                continue
+            members, indent = [], len(ln) - len(ln.lstrip())
+            for j in range(i + 1, min(i + 80, len(ls))):
+                l2 = ls[j]
+                if not l2.strip() or l2.strip().startswith(("//", "#", "*", "/*", "@")):
+                    continue
+                if l2.strip().startswith("}") or (len(l2) - len(l2.lstrip()) <= indent and "{" not in ln and j > i + 1) \
+                        or re.match(r"^\s*(fun|def|func|fn|val|var|companion|override|private|public|static)\b", l2):
+                    break
+                for part in (l2.split(",") if "(" not in l2 else [l2]):
+                    mm = ENUM_MEMBER.match(part)
+                    if mm and mm.group(1) not in ("case", "return", "if", "else"):
+                        members.append(mm.group(1))
+                if ";" in l2:
+                    break
+            hit = seen & set(members)
+            if len(hit) >= 2 and (best is None or len(hit) > best["_hit"]):
+                best = {"type": m.group(1), "file": f, "line": i + 1, "text": ln.strip()[:160], "members": members,
+                        "unseen": [x for x in members if x not in seen], "_hit": len(hit)}
+    if best:
+        best.pop("_hit")
+    return best
+
+
 def grep_lines(root, files, rx):
     """(file, line, text) for every line matching rx in the given files. Skips import lines."""
     hits = []
@@ -380,6 +426,13 @@ def build(root, overlay_path=None):
         b["decisions"] = [{"decision": d.get("decision"), "at": d.get("at"), "pin": (d.get("pin") or "")[:10], "want": d.get("want", "")[:300]}
                           for d in decisions if (d.get("probe") or "").rstrip("/").endswith("/" + pid) or d.get("id", "").endswith("-f-" + pid)]
         b["belief"] = next((x for x in beliefs if x.get("probe") == pid or x.get("id") == pid), None)
+        # states the code declares but no run produced: for each field whose values look like identifiers
+        b["declared"] = []
+        for f in fields:
+            vals = {str(c["fields"][f]) for c in cases if not c.get("unparsed") and f in c["fields"]}
+            d = declared_states(root, [c for c in b["covers"]] + [x for x in nontest if x not in b["covers"]], vals)
+            if d:
+                b["declared"].append(dict(d, field=f))
         b["rules"] = rules_in(root, b["covers"])
         if len(b["rules"]) > 12:  # a big shared file: keep only the constants this probe's own files or wording name
             ptxt = " ".join([p.get("finding", ""), p.get("scenario", ""), p.get("cmd", "")])
@@ -565,9 +618,35 @@ def main():
     ap.add_argument("--overlay")
     ap.add_argument("--out")
     ap.add_argument("--json")
+    ap.add_argument("--baseline", help="file holding what each behavior printed at the last recorded build "
+                                       "(default: <git dir>/bw/atlas/last.json)")
+    ap.add_argument("--record", action="store_true", help="after building, record this build as the baseline for the next one")
     ap.add_argument("--with", dest="more", nargs="*", default=[], help="model JSON files of other repositories to show in the same page")
     a = ap.parse_args()
     m = build(a.root, a.overlay)
+    # what moved since the atlas was last built and recorded: bw's own baseline, independent of any browser
+    root = os.path.abspath(a.root)
+    common = git(["rev-parse", "--git-common-dir"], root).strip()
+    base_path = a.baseline or os.path.join(common if os.path.isabs(common) else os.path.join(root, common), "bw", "atlas", "last.json")
+    prev = load(base_path, None)
+    now = {b["id"]: [c for c in b["cases"] if not c.get("unparsed")] for b in m["behaviors"]}
+    if isinstance(prev, dict) and prev.get("behaviors"):
+        moved = {}
+        for bid, cs in now.items():
+            if bid not in prev["behaviors"]:
+                moved[bid] = {"new": 1}
+                continue
+            d = cell_diff(prev["behaviors"][bid], cs)
+            if d["cells"] or d["added"] or d["removed"]:
+                moved[bid] = d
+        m["prev_build"] = {"at": prev.get("at"), "head": prev.get("head"), "moved": moved,
+                           "gone": [x for x in prev["behaviors"] if x not in now]}
+    else:
+        m["prev_build"] = None
+    if a.record:
+        os.makedirs(os.path.dirname(base_path), exist_ok=True)
+        with open(base_path, "w") as f:
+            json.dump({"at": m["built"], "head": m["head"], "behaviors": now}, f)
     if a.json:
         with open(a.json, "w") as f:
             json.dump(m, f, indent=1)
